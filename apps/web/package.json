@@ -1,0 +1,18 @@
+{
+  "name": "@workoholic/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --config ../../wrangler.jsonc",
+    "typecheck": "wrangler types --config ../../wrangler.jsonc && tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@cloudflare/playwright": "^1.3.6"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0",
+    "wrangler": "^4.157.0"
+  }
+}

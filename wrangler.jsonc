@@ -1,0 +1,71 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "workoholic",
+  "main": "apps/web/src/index.ts",
+  "compatibility_date": "2026-03-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true
+  },
+  "routes": [
+    {
+      "pattern": "__PUBLIC_HOST__",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "directory": "apps/web/public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "__D1_DATABASE_NAME__",
+      "database_id": "__D1_DATABASE_ID__",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "EVIDENCE",
+      "bucket_name": "workoholic-evidence"
+    }
+  ],
+  "workflows": [
+    {
+      "name": "workoholic-job-automation",
+      "binding": "JOB_AUTOMATION",
+      "class_name": "JobAutomationWorkflow"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "0 9 10-13 * *"
+    ]
+  },
+  "browser": {
+    "binding": "BROWSER"
+  },
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ],
+  "secrets_store_secrets": [
+    {
+      "binding": "WORKOHOLIC_CONFIG_KEY",
+      "store_id": "__SECRETS_STORE_ID__",
+      "secret_name": "WORKOHOLIC_CONFIG_KEY"
+    }
+  ],
+  "vars": {
+    "PUBLIC_BASE_URL": "https://__PUBLIC_HOST__",
+    "CF_ACCESS_TEAM_DOMAIN": "__CF_ACCESS_TEAM_DOMAIN__",
+    "CF_ACCESS_AUD": "__CF_ACCESS_AUD__"
+  }
+}

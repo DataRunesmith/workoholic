@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="sv" data-theme="legacy">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#04070e" />
+    <title>Jobbautomation</title>
+    <link rel="stylesheet" href="/assets/dashboard.css" />
+  </head>
+  <body>
+    <header class="page-head">
+      <div>
+        <p class="eyebrow">__SITE_FAMILY__ / Workoholic</p>
+        <h1>Jobbautomation</h1>
+        <p class="muted">
+          StudentConsulting · exakt 10 verifierade ansökningar per månad, samlade i en .txt
+        </p>
+        <p id="freshness" class="muted"></p>
+      </div>
+      <div class="page-actions">
+        <label class="theme-control" for="theme-select"
+          ><span>Tema</span
+          ><select id="theme-select" aria-label="Tema">
+            <option value="legacy">Legacy</option>
+            <option value="forest">__SITE_FAMILY__</option>
+            <option value="blackout">Blackout</option>
+          </select></label
+        >
+        <form action="/auth/logout" method="post">
+          <button class="secondary" type="submit">Logga ut</button>
+        </form>
+      </div>
+    </header>
+    <nav class="tabs" aria-label="Dashboard">
+      <a href="#overview" data-tab="overview">Översikt</a>
+      <a href="#applications" data-tab="applications">Ansökningar</a>
+      <a href="#runs" data-tab="runs">Körningar</a>
+      <a href="#report" data-tab="report">Månadsfiler</a>
+      <a href="#system" data-tab="system">System</a>
+    </nav>
+    <main>
+      <section data-panel="overview"><div class="card">Laddar…</div></section>
+      <section data-panel="applications" hidden></section>
+      <section data-panel="runs" hidden></section>
+      <section data-panel="report" hidden></section>
+      <section data-panel="system" hidden></section>
+    </main>
+    <dialog id="runDialog">
+      <div class="dialog-head">
+        <h2 id="runTitle">Körningsdetaljer</h2>
+        <button id="closeRun" class="secondary">Stäng</button>
+      </div>
+      <div id="runBody"></div>
+    </dialog>
+    <script src="/assets/dashboard.js" defer></script>
+  </body>
+</html>

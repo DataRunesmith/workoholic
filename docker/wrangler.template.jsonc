@@ -1,0 +1,46 @@
+{
+  "name": "workoholic",
+  "main": "docker/container-entry.ts",
+  "compatibility_date": "2026-03-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "assets": {
+    "directory": "apps/web/public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "__D1_DATABASE_NAME__",
+      "database_id": "__D1_DATABASE_ID__",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "EVIDENCE",
+      "bucket_name": "workoholic-evidence"
+    }
+  ],
+  "workflows": [
+    {
+      "name": "workoholic-job-automation",
+      "binding": "JOB_AUTOMATION",
+      "class_name": "JobAutomationWorkflow"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "0 9 10-13 * *"
+    ]
+  },
+  "browser": {
+    "binding": "BROWSER",
+    "remote": __BROWSER_REMOTE__
+  },
+  "vars": {
+    "PUBLIC_BASE_URL": "http://localhost:8787"
+  }
+}
