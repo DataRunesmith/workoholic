@@ -10,6 +10,6 @@ allowBuilds:
 
 # Temporary transitive security override until Wrangler/Miniflare ships undici >= 7.29.1.
 overrides:
-  "undici@<7.29.1": 8.12.3
+  "undici@<7.29.1": 8.12.4
   # GHSA-wq5f-xc86-pv6w: Miniflare pins sharp 0.35.4; remove when upstream ships >=0.35.5.
   "sharp@<0.35.5": 0.35.5
