@@ -10,7 +10,7 @@
     "dev": "pnpm --filter @workoholic/web dev"
   },
   "devDependencies": {
-    "typescript": "^7.0.2",
-    "wrangler": "^4.157.0"
+    "typescript": "7.0.2",
+    "wrangler": "4.160.0"
   }
 }
