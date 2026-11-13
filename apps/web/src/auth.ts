@@ -49,7 +49,7 @@ export async function authorizeDashboardRequest(
         eyebrow: "Säker inloggning",
         title: "Autentisering är inte redo",
         message: passwordModeRequested(env)
-          ? "AUTH_MODE=password kräver ADMIN_PASSWORD (minst 8 tecken). Tjänsten är låst tills det är satt."
+          ? "AUTH_MODE=password kräver ADMIN_PASSWORD (minst 16 tecken). Tjänsten är låst tills det är satt."
           : "Cloudflare Access-konfigurationen (CF_ACCESS_TEAM_DOMAIN och CF_ACCESS_AUD) är inte komplett. Tjänsten är låst tills den är verifierad.",
         code: "auth_unavailable",
       });

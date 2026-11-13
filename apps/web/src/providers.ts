@@ -14,9 +14,9 @@ export async function withStudentConsultingProvider<T>(
   operation: (provider: StudentConsultingProvider) => Promise<T>,
 ): Promise<T> {
   const browser = await launch(env.BROWSER);
-  const page = await browser.newPage();
 
   try {
+    const page = await browser.newPage();
     const credentials = new EnvironmentCredentialsProvider(env);
     const provider = new StudentConsultingProvider({
       page,

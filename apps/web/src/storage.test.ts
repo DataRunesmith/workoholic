@@ -3,6 +3,7 @@ import {
   claimRunStart,
   deleteRunRecords,
   failOrphanedRunningRuns,
+  markApplicationUncertain,
   isRetryablePreSubmitFailure,
   listRetryableFailedJobs,
   reclassifyApplicationNotSubmitted,
@@ -338,12 +339,27 @@ describe("definite not-applied reconciliation", () => {
     expect(fake.sql.some((statement) => statement.includes("applied_at = NULL"))).toBe(true);
   });
 
-  it("does not free a submitted or verified application", async () => {
+  it("releases an interrupted submitted application after a definite not-applied result", async () => {
     const fake = reclassifyDb({
       status: "submitted",
       applied_at: "2026-10-02T12:27:17.152Z",
       verified_at: null,
       slot_state: "submitted",
+    });
+
+    await expect(
+      reclassifyApplicationNotSubmitted(fake.db, "application:studentconsulting:87570"),
+    ).resolves.toBe(true);
+    expect(fake.sql.some((statement) => statement.includes("status IN ('needs_user_action', 'submitted')"))).toBe(true);
+    expect(fake.sql.some((statement) => statement.includes("state IN ('uncertain', 'submitted')"))).toBe(true);
+  });
+
+  it("never releases a verified application", async () => {
+    const fake = reclassifyDb({
+      status: "verified",
+      applied_at: "2026-10-02T12:27:17.152Z",
+      verified_at: "2026-10-02T12:28:00.000Z",
+      slot_state: "verified",
     });
 
     await expect(
@@ -426,7 +442,7 @@ describe("automation run claims", () => {
     expect(binds).toEqual([["manual:test"], ["manual:test"], ["manual:test"]]);
   });
 
-  it("reconciles orphaned unlinked runs globally before a new claim", async () => {
+  it("fails stale running runs globally by their 45-minute heartbeat before a new claim", async () => {
     let statement = "";
     let bindCalled = false;
     const db = {
@@ -447,10 +463,28 @@ describe("automation run claims", () => {
     await failOrphanedRunningRuns(db);
 
     expect(statement).toContain("status = 'running'");
-    expect(statement).toContain("workflow_instance_id IS NULL");
-    expect(statement).toContain("datetime('now', '-5 minutes')");
-    expect(statement).toContain("NOT EXISTS");
+    expect(statement).toContain("updated_at <= datetime('now', '-45 minutes')");
+    expect(statement).not.toContain("workflow_instance_id");
     expect(statement).not.toContain("application_month = ?");
     expect(bindCalled).toBe(false);
+  });
+
+  it("marks an application uncertain only while it is unverified and still pending", async () => {
+    const statements: string[] = [];
+    const db = {
+      prepare(sql: string) {
+        statements.push(sql);
+        return { bind: () => ({ sql }) };
+      },
+      async batch() {
+        return [];
+      },
+    } as unknown as D1Database;
+
+    await markApplicationUncertain(db, "app-1");
+
+    expect(statements[0]).toContain("verified_at IS NULL");
+    expect(statements[0]).toContain("status IN ('applying','submitted','needs_user_action')");
+    expect(statements[1]).toContain("status = 'needs_user_action' AND verified_at IS NULL");
   });
 });

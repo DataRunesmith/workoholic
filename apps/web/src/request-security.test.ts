@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { requireSameOriginMutation } from "./request-security";
+import { requireSameOriginMutation, requestBodyExceedsLimit } from "./request-security";
 
 describe("requireSameOriginMutation", () => {
   it("allows safe methods without an Origin header", () => {
@@ -40,5 +40,23 @@ describe("requireSameOriginMutation", () => {
       },
     });
     expect(requireSameOriginMutation(request)?.status).toBe(403);
+  });
+});
+
+describe("requestBodyExceedsLimit", () => {
+  it("rejects a streamed body above the configured limit", async () => {
+    const request = new Request("https://workoholic.example.com/api/configuration", {
+      method: "POST",
+      body: new Uint8Array(128 * 1024 + 1),
+    });
+    expect(await requestBodyExceedsLimit(request, 128 * 1024)).toBe(true);
+  });
+
+  it("accepts a body within the configured limit", async () => {
+    const request = new Request("https://workoholic.example.com/api/configuration", {
+      method: "POST",
+      body: "{}",
+    });
+    expect(await requestBodyExceedsLimit(request, 128 * 1024)).toBe(false);
   });
 });

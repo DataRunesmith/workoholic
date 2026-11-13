@@ -362,6 +362,13 @@ export class StudentConsultingProvider implements JobProvider {
         waitUntil: "domcontentloaded",
         timeout: 30_000,
       });
+      if (safeStudentConsultingPath(this.page.url()) !== new URL(safeJobUrl).pathname) {
+        return {
+          status: "failed",
+          error: "STUDENTCONSULTING_JOB_REDIRECTED: the job page left its verified origin or changed Jobb-ID.",
+          submissionAttempted: false,
+        };
+      }
 
       const bodyText = await safeInnerText(this.page.locator("body").first());
       if (alreadyApplied(bodyText)) {
@@ -381,7 +388,9 @@ export class StudentConsultingProvider implements JobProvider {
         };
       }
 
-      await fillKnownSafeRequiredControls(this.page, job);
+      // Never invent experience answers or application motivation. Expand the
+      // known section so required unanswered controls are detected and block submission.
+      await expandExperienceQuestion(this.page);
 
       const requiredState = await validateRequiredControls(this.page);
       if (!requiredState.ok) {
@@ -790,6 +799,7 @@ export class StudentConsultingProvider implements JobProvider {
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     });
+    if (safeStudentConsultingPath(this.page.url()) !== new URL(safeJobUrl).pathname) return null;
 
     const title = (await safeInnerText(this.page.locator("h1").first())).trim();
     const bodyText = await safeInnerText(this.page.locator("body").first());
@@ -1404,10 +1414,6 @@ async function firstVisible(
   return null;
 }
 
-export function buildStudentConsultingPitch(_job: JobCandidate): string {
-  return "Behöver jobb.";
-}
-
 async function expandExperienceQuestion(page: BrowserPage): Promise<void> {
   const controls = page.locator(
     'button[aria-expanded],[role="button"][aria-expanded],summary,[data-toggle="collapse"],[data-bs-toggle="collapse"]',
@@ -1426,46 +1432,6 @@ async function expandExperienceQuestion(page: BrowserPage): Promise<void> {
   }
 
   if (clicked) await page.waitForTimeout(250);
-}
-
-function isNoExperienceAnswer(label: string): boolean {
-  const normalized = normalize(label);
-  return /^(ingen.*erfarenhet|saknar.*erfarenhet|0\s*(års?|år|year|years)?\s*(erfarenhet|experience)?|none|no experience)$/.test(
-    normalized,
-  );
-}
-
-async function selectNoExperienceAnswer(page: BrowserPage): Promise<void> {
-  const candidates = page.locator('label,button,[role="radio"]');
-  const count = Math.min(await candidates.count(), 150);
-  const matches: BrowserLocator[] = [];
-
-  for (let index = 0; index < count; index += 1) {
-    const candidate = candidates.nth(index);
-    if (!(await candidate.isVisible())) continue;
-    if (isNoExperienceAnswer(await safeInnerText(candidate))) {
-      matches.push(candidate);
-    }
-  }
-
-  if (matches.length === 1) {
-    await matches[0].click({ timeout: 5_000 });
-  }
-}
-
-async function fillKnownSafeRequiredControls(page: BrowserPage, job: JobCandidate): Promise<void> {
-  await expandExperienceQuestion(page);
-  await selectNoExperienceAnswer(page);
-
-  const pitchFields = page.locator('textarea#Pitch, textarea[name="Pitch"]');
-  const count = Math.min(await pitchFields.count(), 2);
-  if (count !== 1) return;
-
-  const pitch = pitchFields.first();
-  if (!(await pitch.isVisible())) return;
-  if ((await pitch.inputValue()).trim() !== "") return;
-
-  await pitch.fill(buildStudentConsultingPitch(job));
 }
 
 async function validateRequiredControls(

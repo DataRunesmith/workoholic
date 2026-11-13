@@ -37,6 +37,22 @@ describe("monthly export e-mail", () => {
     expect(deliveries.map((x) => x.status)).toEqual(["sent", "sent"]);
   });
 
+  it("encodes large UTF-8 attachments without spreading the whole report into arguments", async () => {
+    const send = vi.fn().mockResolvedValue({ messageId: "large" });
+    const content = "å".repeat(100_000);
+    await sendActivityExportEmail(
+      {
+        EMAIL: { send },
+        NOTIFY_EMAIL_FROM: "workoholic@x.example",
+        NOTIFY_EMAIL_TO: "a@x.example",
+      },
+      { ...row, content_text: content },
+    );
+    const encoded = send.mock.calls[0][0].attachments[0].content as string;
+    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+    expect(new TextDecoder().decode(bytes)).toBe(content);
+  });
+
   it("sends one e-mail per address in separate mode and reports each failure", async () => {
     const send = vi
       .fn()

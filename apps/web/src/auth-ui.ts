@@ -45,7 +45,11 @@ export function renderErrorPage(options: ErrorPageOptions): Response {
   return htmlResponse(html, options.status);
 }
 
-export function renderLoginPage(message = ""): Response {
+export function renderLoginPage(
+  message = "",
+  status = message ? 401 : 200,
+  headers: Record<string, string> = {},
+): Response {
   const html = pageShell({
     title: "Logga in",
     body: `
@@ -60,7 +64,9 @@ export function renderLoginPage(message = ""): Response {
       </section>
     `,
   });
-  return htmlResponse(html, message ? 401 : 200);
+  const response = htmlResponse(html, status);
+  for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
+  return response;
 }
 
 export function renderAuthStyles(): Response {
