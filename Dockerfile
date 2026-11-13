@@ -1,7 +1,7 @@
 # Self-hosted copy: the Worker runs in wrangler's local runtime and keeps its
 # data in /data. No Cloudflare account is needed. The libraries are what the
 # bundled Chrome needs to start.
-FROM node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
+FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 libdbus-1-3 \
     libdrm2 libexpat1 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
