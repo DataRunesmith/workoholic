@@ -373,6 +373,8 @@ Thumbs.db
 
 node_modules/
 build/
+setup.env
+.setup-secrets
 site/
 site-docs/
 .wrangler/
