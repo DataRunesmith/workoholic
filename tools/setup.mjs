@@ -20,6 +20,7 @@ const API = "https://api.cloudflare.com/client/v4";
 const WORKER = "workoholic";
 const BUCKET = "workoholic-evidence";
 const KEY_NAME = "WORKOHOLIC_CONFIG_KEY";
+const KV_TITLE = "workoholic-config"; // holds the non-secret render settings for cloud builds
 
 function parseEnv(file) {
   const values = new Map(); // a Map has no property names to inject into
@@ -132,8 +133,11 @@ async function main() {
   const keyBlocked = !hasKey && Boolean(database) && !get("ALLOW_NEW_CONFIG_KEY");
   const keyBlockedMessage = `D1 database "${dbName}" already exists but ${KEY_NAME} was not found in any Secrets Store. A new key could not decrypt settings saved earlier. Restore the old key, or set ALLOW_NEW_CONFIG_KEY=1 in setup.env if the database holds no saved settings.`;
 
+  let kv = (await api("GET", `/accounts/${account}/storage/kv/namespaces?per_page=100`)).find((item) => item.title === KV_TITLE);
+
   if (check) {
     say(`Would ${database ? "reuse" : "create"} D1 database "${dbName}"`);
+    say(`Would ${kv ? "reuse" : "create"} KV namespace "${KV_TITLE}" and store the render settings in it`);
     say(r2Enabled ? `Would ${hasBucket ? "reuse" : "create"} R2 bucket "${BUCKET}"` : "✘ R2 is not enabled yet: enable it in the dashboard (R2) before the real run");
     say(`Would ${store ? "reuse" : "create"} a Secrets Store${hasKey ? "" : ` and add ${KEY_NAME}`}`);
     if (keyBlocked) say(`✘ ${keyBlockedMessage}`);
@@ -157,6 +161,10 @@ async function main() {
     store = await api("POST", `/accounts/${account}/secrets_store/stores`, { name: "default_secrets_store" });
     say("✔ Created Secrets Store");
   } else say("✔ Secrets Store exists");
+  if (!kv) {
+    kv = await api("POST", `/accounts/${account}/storage/kv/namespaces`, { title: KV_TITLE });
+    say(`✔ Created KV namespace "${KV_TITLE}"`);
+  } else say(`✔ KV namespace "${KV_TITLE}" exists`);
 
   if (!hasKey) {
     // Never replaced afterwards: the configuration in D1 is encrypted with it.
@@ -189,6 +197,26 @@ async function main() {
   if (render.status !== 0) fail(`render failed:\n${render.stderr}`);
   say("✔ Rendered build/");
 
+  // The settings are not secret. Cloud builds read them from KV, so no build
+  // variables have to be typed in.
+  const buildVariables = Object.fromEntries(
+    [
+      "PUBLIC_HOST",
+      "D1_DATABASE_NAME",
+      "D1_DATABASE_ID",
+      "SECRETS_STORE_ID",
+      "CF_ACCESS_TEAM_DOMAIN",
+      "CF_ACCESS_AUD",
+      "CONFIG_NAMESPACE",
+      "SITE_FAMILY",
+      "THEME_KEY_PREFIX",
+      "THEME_COOKIE_DOMAIN",
+    ].map((name) => [name, renderEnv[name]]),
+  );
+  if (!/^[0-9a-f]{32}$/.test(kv.id)) fail("Unexpected KV namespace ID.");
+  await api("PUT", `/accounts/${account}/storage/kv/namespaces/${kv.id}/values/settings`, buildVariables);
+  say(`✔ Stored the render settings in KV ("${KV_TITLE}", key "settings")`);
+
   // 4. Database, then the Worker
   wrangler(["d1", "migrations", "apply", "DB", "--remote", "--cwd", "build"]);
   say("✔ Migrations applied");
@@ -220,40 +248,27 @@ async function main() {
     say("✔ Removed the old AUTH_MODE secret so Cloudflare Access is used");
   }
 
-  // 6. Workers Builds: set the commands and build variables (none of them secret)
-  const buildVariables = Object.fromEntries(
-    [
-      "PUBLIC_HOST",
-      "D1_DATABASE_NAME",
-      "D1_DATABASE_ID",
-      "SECRETS_STORE_ID",
-      "CF_ACCESS_TEAM_DOMAIN",
-      "CF_ACCESS_AUD",
-      "CONFIG_NAMESPACE",
-      "SITE_FAMILY",
-      "THEME_KEY_PREFIX",
-      "THEME_COOKIE_DOMAIN",
-    ].map((name) => [name, renderEnv[name]]),
-  );
-  const buildsNote = await configureWorkersBuilds(account, buildVariables);
+  // 6. Workers Builds: set the build and deploy commands
+  const buildsNote = await configureWorkersBuilds(account);
   if (buildsNote) {
     say(`
 ${buildsNote}
-Set these by hand in Workers & Pages → ${WORKER} → Settings → Builds.
-If the build fails at the migration step, select an API token with D1 Edit and Workers Scripts Edit under Settings → Builds → API token (the default build token may lack D1 access).
+Set these two by hand in Workers & Pages → ${WORKER} → Settings → Builds (no build variables are needed):
   Build command : ${BUILD_COMMAND}
   Deploy command: ${DEPLOY_COMMAND}
-  Build variables (not secret):
+If the build fails at the migration step, select an API token with D1 Edit and Workers Scripts Edit under Settings → Builds → API token (the default build token may lack D1 access).
+If it cannot read the KV settings (it needs Cloudflare credentials to do so), use this build command instead and add these build variables (not secret):
+  Build command : pnpm install --frozen-lockfile && node tools/render.mjs - build
 ${Object.entries(buildVariables).map(([name, value]) => `    ${name}=${value}`).join("\n")}`);
   }
   say("Then delete the setup token in the dashboard (it is only needed for this step).");
 }
 
-const BUILD_COMMAND = "pnpm install --frozen-lockfile && node tools/render.mjs - build";
+const BUILD_COMMAND = `pnpm install --frozen-lockfile && node tools/render.mjs kv:${KV_TITLE} build`;
 const DEPLOY_COMMAND = "npx wrangler d1 migrations apply DB --remote --cwd build && npx wrangler deploy --cwd build";
 
 // Returns "" when Workers Builds is configured, otherwise why it was not.
-async function configureWorkersBuilds(account, variables) {
+async function configureWorkersBuilds(account) {
   try {
     const scripts = await api("GET", `/accounts/${account}/workers/scripts`);
     const tag = scripts.find((script) => script.id === WORKER)?.tag;
@@ -267,12 +282,7 @@ async function configureWorkersBuilds(account, variables) {
       deploy_command: DEPLOY_COMMAND,
       root_directory: "/",
     });
-    await api(
-      "PATCH",
-      `/accounts/${account}/builds/triggers/${trigger.trigger_uuid}/environment_variables`,
-      Object.fromEntries(Object.entries(variables).map(([name, value]) => [name, { value, is_secret: false }])),
-    );
-    say("✔ Workers Builds: build and deploy commands and build variables are set");
+    say("✔ Workers Builds: build and deploy commands are set");
     return "";
   } catch (error) {
     const denied = /HTTP 40[13]/.test(String(error));
