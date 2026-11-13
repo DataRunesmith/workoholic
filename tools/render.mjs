@@ -44,7 +44,24 @@ if (!valuesFile || !outArg) {
 const source = realpathSync.native(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
 const requestedOut = resolve(outArg);
 mkdirSync(dirname(requestedOut), { recursive: true });
-const out = resolve(realpathSync.native(dirname(requestedOut)), basename(requestedOut));
+const candidateOut = resolve(realpathSync.native(dirname(requestedOut)), basename(requestedOut));
+// The output must sit strictly inside a trusted root: the repository's own
+// generated directories, the temp directory, the current directory, or a root
+// named by RENDER_OUT_ROOT (the container image uses /srv).
+const trustedRoots = [
+  ...["dist", ".wrangler", "site-docs", "build"].map((name) => join(source, name)),
+  realpathSync.native(tmpdir()),
+  realpathSync.native(process.cwd()),
+  ...(process.env.RENDER_OUT_ROOT ? [realpathSync.native(resolve(process.env.RENDER_OUT_ROOT))] : []),
+];
+let out = "";
+for (const root of trustedRoots) {
+  if (candidateOut.startsWith(root + sep)) out = candidateOut;
+}
+if (!out)
+  throw new Error(
+    "The output directory must be inside the current directory, the temp directory or RENDER_OUT_ROOT.",
+  );
 let outInfo;
 try {
   outInfo = lstatSync(out);
@@ -79,19 +96,6 @@ if (isWithin(source, out)) {
   }).trim();
   if (trackedFiles) throw new Error("Refusing to delete tracked files from the output directory.");
 }
-// The output must sit strictly inside a trusted root: the repository's own
-// generated directories, the temp directory, the current directory, or a root
-// named by RENDER_OUT_ROOT (the container image uses /srv).
-const trustedRoots = [
-  ...["dist", ".wrangler", "site-docs", "build"].map((name) => join(source, name)),
-  realpathSync.native(tmpdir()),
-  realpathSync.native(process.cwd()),
-  ...(process.env.RENDER_OUT_ROOT ? [realpathSync.native(resolve(process.env.RENDER_OUT_ROOT))] : []),
-];
-if (!trustedRoots.some((root) => out.startsWith(root + sep)))
-  throw new Error(
-    "The output directory must be inside the current directory, the temp directory or RENDER_OUT_ROOT.",
-  );
 const SKIP = new Set(["node_modules", ".wrangler", "dist", ".dev.vars", ".git", ".github"]);
 const TEXT = new Set([
   ".js",
