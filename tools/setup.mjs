@@ -16,7 +16,6 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
-const API = "https://api.cloudflare.com/client/v4";
 const WORKER = "workoholic";
 const BUCKET = "workoholic-evidence";
 const KEY_NAME = "WORKOHOLIC_CONFIG_KEY";
@@ -49,12 +48,12 @@ function fail(message) {
 const say = (message) => console.log(message);
 
 async function api(method, path, body) {
-  // Only ever talk to the Cloudflare API, whatever the path was built from.
-  const url = new URL(`${API}${path}`);
-  if (url.origin !== new URL(API).origin || !/^\/client\/v4\/(user|accounts)(\/|$)/.test(url.pathname)) {
-    throw new Error(`refusing to call ${url.origin}${url.pathname}`);
+  // Only ever talk to the Cloudflare API: the host is fixed in the URL below and
+  // the path must stay under /user or /accounts, with no dot segments.
+  if (!/^\/(user|accounts)(\/[A-Za-z0-9_.-]+)*(\?[A-Za-z0-9_=&%.-]*)?$/.test(path) || path.includes("..")) {
+    throw new Error(`refusing to call ${path.split("?")[0]}`);
   }
-  const response = await fetch(url, {
+  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
     method,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
