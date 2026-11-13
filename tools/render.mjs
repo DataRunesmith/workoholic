@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // Renders a deployable copy of this repo with your own values.
 //
-//   node tools/render.mjs <values.env | -> <out-dir> [overlay-dir]
+//   node tools/render.mjs <values.env | - | kv:NAMESPACE> <out-dir> [overlay-dir]
+//
+// "kv:NAMESPACE" reads the values from a Workers KV namespace (written by
+// pnpm setup:cloudflare), so a Cloudflare build needs no build variables.
 //
 // The repo holds only placeholders (__NAME__). Every NAME listed in
 // cloudflare.example.env must have a value in <values.env> (it may be empty);
@@ -12,6 +15,7 @@
 // optional overlay directory are copied on top (e.g. your own images). Routes
 // whose pattern ends up empty are dropped from wrangler.jsonc. Deploy with
 //   npx wrangler deploy --cwd <out-dir>   (politiker: --cwd <out-dir>/app)
+import { spawnSync } from "node:child_process";
 import {
   closeSync,
   cpSync,
@@ -69,9 +73,40 @@ function parseEnv(file) {
   return values;
 }
 
+// "kv:<namespace title>" reads the values from the key "settings" (a JSON
+// object) in a Workers KV namespace, using the credentials wrangler finds in
+// the environment (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID).
+function wranglerJson(args) {
+  const run = spawnSync("pnpm", ["exec", "wrangler", ...args], { cwd: source, encoding: "utf8" });
+  if (run.status !== 0) {
+    const text = `${run.stdout}${run.stderr}`.replace(/\x1b\[[0-9;]*m/g, "").trim();
+    console.error(
+      `wrangler ${args.slice(0, 3).join(" ")} failed (does the build have Cloudflare credentials?):\n${text.split("\n").slice(-8).join("\n")}`,
+    );
+    process.exit(1);
+  }
+  // Skip any banner lines: the JSON starts at the first line that opens with [ or {.
+  const start = run.stdout.search(/^[[{]/m);
+  return JSON.parse(run.stdout.slice(start < 0 ? 0 : start));
+}
+
+function readKvValues(title) {
+  const namespace = wranglerJson(["kv", "namespace", "list"]).find((item) => item.title === title);
+  if (!namespace) {
+    console.error(`KV namespace "${title}" was not found. Run pnpm setup:cloudflare first.`);
+    process.exit(1);
+  }
+  const settings = wranglerJson(["kv", "key", "get", "settings", "--namespace-id", namespace.id, "--remote"]);
+  return new Map(
+    declared.filter((name) => typeof settings[name] === "string").map((name) => [name, settings[name]]),
+  );
+}
+
 const declared = [...parseEnv(join(source, "cloudflare.example.env")).keys()];
-const values =
-  valuesFile === "-"
+const fromKv = valuesFile.startsWith("kv:");
+const values = fromKv
+  ? readKvValues(valuesFile.slice(3))
+  : valuesFile === "-"
     ? new Map(
         declared
           .filter((name) => name in process.env)
@@ -81,7 +116,7 @@ const values =
 const missing = declared.filter((name) => !values.has(name));
 if (missing.length) {
   console.error(
-    `${valuesFile === "-" ? "the environment" : valuesFile} is missing: ${missing.join(", ")}`,
+    `${valuesFile === "-" ? "the environment" : fromKv ? `the KV settings (${valuesFile})` : valuesFile} is missing: ${missing.join(", ")}`,
   );
   process.exit(1);
 }

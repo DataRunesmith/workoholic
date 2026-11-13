@@ -7,7 +7,9 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "test": "node --test test/*.test.mjs && pnpm -r test",
-    "dev": "pnpm --filter @workoholic/web dev"
+    "dev": "pnpm --filter @workoholic/web dev",
+    "setup:cloudflare": "node --env-file-if-exists=setup.env tools/setup.mjs",
+    "secrets:push": "node --env-file-if-exists=setup.env tools/secrets.mjs"
   },
   "devDependencies": {
     "typescript": "7.0.2",
