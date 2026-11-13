@@ -126,14 +126,24 @@ const TEXT = new Set([
   "",
 ]);
 
-function parseEnv(file) {
+const readRoots = [...trustedRoots, source];
+function parseEnv(requestedFile) {
+  const file = resolve(requestedFile);
+  const fileRoot = readRoots.find((root) => file.startsWith(root + sep));
+  if (!fileRoot || !file.startsWith(fileRoot + sep))
+    throw new Error("The values file must be inside the current directory, the temp directory or RENDER_OUT_ROOT.");
   const values = new Map();
   for (const line of readFileSync(file, "utf8").split("\n")) {
     const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
     if (!match) continue;
     let value = match[2];
-    if (value.startsWith("@"))
-      value = readFileSync(resolve(dirname(file), value.slice(1)), "utf8").trimEnd();
+    if (value.startsWith("@")) {
+      const referenced = resolve(dirname(file), value.slice(1));
+      const referencedRoot = readRoots.find((root) => referenced.startsWith(root + sep));
+      if (!referencedRoot || !referenced.startsWith(referencedRoot + sep))
+        throw new Error("A referenced file must be inside a trusted root.");
+      value = readFileSync(referenced, "utf8").trimEnd();
+    }
     values.set(match[1], value.replace(/\\n/g, "\n"));
   }
   return values;
