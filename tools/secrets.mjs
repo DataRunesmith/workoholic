@@ -15,6 +15,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+if (process.platform === "win32") {
+  console.error("✘ Run this on macOS, Linux or WSL. Windows is not supported.");
+  process.exit(1);
+}
 const FILE = join(root, "secrets.env"); // a fixed location, never a path from the command line
 
 let text;

@@ -15,6 +15,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// The script relies on process groups and on finding pnpm, so it needs macOS, Linux or WSL.
+if (process.platform === "win32") {
+  console.error("✘ Run setup on macOS, Linux or WSL. Windows is not supported.");
+  process.exit(1);
+}
 const check = process.argv.includes("--check");
 const WORKER = "workoholic";
 const BUCKET = "workoholic-evidence";
@@ -107,7 +112,7 @@ async function stopChildren() {
     try {
       process.kill(-current.child.pid, signal); // the whole process group
     } catch {
-      current.child.kill(signal); // no process groups (Windows): the child only
+      // The group is already gone.
     }
   };
   signalGroup("SIGTERM");
