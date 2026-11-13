@@ -382,3 +382,6 @@ site-docs/
 .wrangler/
 coverage/
 worker-configuration.d.ts
+
+# Local Claude Code statusline script, kept outside the repository
+statusline.sh
