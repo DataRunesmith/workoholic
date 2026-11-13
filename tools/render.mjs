@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Renders a deployable copy of this repo with your own values.
 //
-//   node tools/render.mjs <values.env | - | kv:NAMESPACE> <out-dir> [overlay-dir]
+//   node tools/render.mjs <values.env | - | kv:NAMESPACE> <out-dir>
 //
 // "kv:NAMESPACE" reads the values from a Workers KV namespace (written by
 // pnpm setup:cloudflare), so a Cloudflare build needs no build variables.
@@ -12,7 +12,7 @@
 // the values are read from environment variables instead, e.g. the build
 // variables of Cloudflare Workers Builds or a container's environment.
 // Values may use \n for line breaks, or "@path" to read a file. Files in the
-// optional overlay directory are copied on top (e.g. your own images). Routes
+// repository are copied into <out-dir>. Routes
 // whose pattern ends up empty are dropped from wrangler.jsonc. Deploy with
 //   npx wrangler deploy --cwd <out-dir>   (politiker: --cwd <out-dir>/app)
 import { execFileSync, spawnSync } from "node:child_process";
@@ -36,9 +36,9 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-const [valuesFile, outArg, overlayArg] = process.argv.slice(2);
+const [valuesFile, outArg] = process.argv.slice(2);
 if (!valuesFile || !outArg) {
-  console.error("usage: node tools/render.mjs <values.env | -> <out-dir> [overlay-dir]");
+  console.error("usage: node tools/render.mjs <values.env | -> <out-dir>");
   process.exit(2);
 }
 const source = realpathSync.native(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -206,21 +206,6 @@ for (const name of readdirSync(source)) {
       filter: (candidate) => keep(candidate) && !lstatSync(candidate).isSymbolicLink(),
     });
 }
-const overlayDir = overlayArg ? resolve(overlayArg) : "";
-if (overlayDir) {
-  const overlayRoot = trustedRoots.find((root) => overlayDir.startsWith(root + sep));
-  if (!overlayRoot || !overlayDir.startsWith(overlayRoot + sep))
-    throw new Error("The overlay directory must be inside a trusted root.");
-}
-if (overlayDir && existsSync(overlayDir)) {
-  if (lstatSync(overlayDir).isSymbolicLink())
-    throw new Error("Overlay directory cannot be a symbolic link.");
-  cpSync(overlayDir, out, {
-    recursive: true,
-    filter: (candidate) => !lstatSync(candidate).isSymbolicLink(),
-  });
-}
-
 // Dependencies stay in the repo; link them instead of copying.
 (function linkModules(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
