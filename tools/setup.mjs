@@ -274,8 +274,10 @@ async function configureWorkersBuilds(account) {
     const tag = scripts.find((script) => script.id === WORKER)?.tag;
     if (!tag) return "→ Workers Builds: the Worker's tag was not found.";
     const triggers = await api("GET", `/accounts/${account}/builds/workers/${encodeURIComponent(tag)}/triggers`);
-    const trigger = triggers[0];
-    if (!trigger) return `→ Workers Builds: no repository is connected yet. Connect it in Workers & Pages → ${WORKER} → Settings → Builds, then run this again.`;
+    if (triggers.length === 0) return `→ Workers Builds: no repository is connected yet. Connect it in Workers & Pages → ${WORKER} → Settings → Builds, then run this again.`;
+    // Only the production trigger (builds main) gets the production commands.
+    const trigger = triggers.find((item) => item.branch_includes?.join() === "main" && !item.branch_excludes?.length);
+    if (!trigger) return '→ Workers Builds: no production trigger (branch_includes ["main"]) was found.';
     if (!/^[0-9a-f-]{36}$/i.test(trigger.trigger_uuid)) return "→ Workers Builds: unexpected trigger ID.";
     await api("PATCH", `/accounts/${account}/builds/triggers/${trigger.trigger_uuid}`, {
       build_command: BUILD_COMMAND,
