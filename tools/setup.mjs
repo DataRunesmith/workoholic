@@ -12,8 +12,9 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
 const API = "https://api.cloudflare.com/client/v4";
 const WORKER = "workoholic";
@@ -22,7 +23,7 @@ const KEY_NAME = "WORKOHOLIC_CONFIG_KEY";
 
 function parseEnv(file) {
   const values = new Map(); // a Map has no property names to inject into
-  for (const line of readFileSync(file, "utf8").split("\n")) {
+  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
     const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
     if (match) values.set(match[1], match[2].trim());
   }
@@ -37,6 +38,7 @@ if (!token) fail("CLOUDFLARE_API_TOKEN is missing. Put it in setup.env (see setu
 const auth = get("AUTH", "password");
 if (!["password", "access"].includes(auth)) fail("AUTH must be 'password' or 'access'.");
 const host = get("PUBLIC_HOST");
+if (!host) fail("PUBLIC_HOST is missing. Set the hostname the app will be served on (a domain in your Cloudflare account).");
 // Values end up in request headers, URL paths and the rendered config, so only
 // accept the shapes Cloudflare actually uses.
 if (!/^[A-Za-z0-9_-]{20,}$/.test(token)) fail("CLOUDFLARE_API_TOKEN looks malformed (letters, digits, _ and - only).");
@@ -72,13 +74,15 @@ async function api(method, path, body) {
   return json.result;
 }
 
+let accountId = ""; // set once the account is known, so wrangler targets the same one
+
 // Wrangler reads the token from the environment; it is never put on a command line.
 function wrangler(args, { input, cwd = root } = {}) {
   const run = spawnSync("pnpm", ["exec", "wrangler", ...args], {
     cwd,
     input,
     encoding: "utf8",
-    env: { ...process.env, CLOUDFLARE_API_TOKEN: token, CI: "1" },
+    env: { ...process.env, CLOUDFLARE_API_TOKEN: token, ...(accountId && { CLOUDFLARE_ACCOUNT_ID: accountId }), CI: "1" },
   });
   if (run.status !== 0) {
     const text = `${run.stdout}\n${run.stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
@@ -94,6 +98,7 @@ async function main() {
     fail(`The token sees ${accounts.length} accounts. Set CLOUDFLARE_ACCOUNT_ID in setup.env.`);
   }
   const account = get("CLOUDFLARE_ACCOUNT_ID") || accounts[0].id;
+  accountId = account;
   say(`✔ Token works (account ${accounts.find((a) => a.id === account)?.name ?? account})`);
 
   const dbName = get("D1_DATABASE_NAME", "workoholic");
@@ -107,22 +112,36 @@ async function main() {
   });
   if (!r2Enabled && !check) fail("R2 is not enabled. Enable it once in the dashboard (R2), then run again.");
   const hasBucket = (buckets.buckets ?? buckets).some((b) => b.name === BUCKET);
+  // Look for the key in every store and every page, so an existing one is never missed.
   const stores = await api("GET", `/accounts/${account}/secrets_store/stores`);
   let store = stores[0];
   let hasKey = false;
-  if (store) {
-    const secrets = await api("GET", `/accounts/${account}/secrets_store/stores/${store.id}/secrets?per_page=100`);
-    hasKey = secrets.some((s) => s.name === KEY_NAME);
+  for (const candidate of stores) {
+    for (let page = 1; !hasKey; page++) {
+      const secrets = await api("GET", `/accounts/${account}/secrets_store/stores/${candidate.id}/secrets?per_page=100&page=${page}`);
+      if (secrets.some((s) => s.name === KEY_NAME)) {
+        hasKey = true;
+        store = candidate;
+      }
+      if (secrets.length < 100) break;
+    }
+    if (hasKey) break;
   }
+  // A new key cannot decrypt configuration saved under an earlier one.
+  const keyBlocked = !hasKey && Boolean(database) && !get("ALLOW_NEW_CONFIG_KEY");
+  const keyBlockedMessage = `D1 database "${dbName}" already exists but ${KEY_NAME} was not found in any Secrets Store. A new key could not decrypt settings saved earlier. Restore the old key, or set ALLOW_NEW_CONFIG_KEY=1 in setup.env if the database holds no saved settings.`;
 
   if (check) {
     say(`Would ${database ? "reuse" : "create"} D1 database "${dbName}"`);
     say(r2Enabled ? `Would ${hasBucket ? "reuse" : "create"} R2 bucket "${BUCKET}"` : "✘ R2 is not enabled yet: enable it in the dashboard (R2) before the real run");
     say(`Would ${store ? "reuse" : "create"} a Secrets Store${hasKey ? "" : ` and add ${KEY_NAME}`}`);
-    say(`Would deploy "${WORKER}" ${host ? `on ${host}` : "on workers.dev (no PUBLIC_HOST)"} with ${auth} login`);
+    if (keyBlocked) say(`✘ ${keyBlockedMessage}`);
+    say(`Would deploy "${WORKER}" on ${host} with ${auth} login`);
     say("Nothing was changed.");
     return;
   }
+
+  if (keyBlocked) fail(keyBlockedMessage);
 
   // 2. Resources
   if (!database) {
@@ -138,7 +157,6 @@ async function main() {
     say("✔ Created Secrets Store");
   } else say("✔ Secrets Store exists");
 
-  const generated = [];
   if (!hasKey) {
     // Never replaced afterwards: the configuration in D1 is encrypted with it.
     await api("POST", `/accounts/${account}/secrets_store/stores/${store.id}/secrets`, [
@@ -168,15 +186,6 @@ async function main() {
   };
   const render = spawnSync("node", ["tools/render.mjs", "-", "build"], { cwd: root, env: renderEnv, encoding: "utf8" });
   if (render.status !== 0) fail(`render failed:\n${render.stderr}`);
-  if (!host) {
-    // No custom domain: serve on workers.dev instead.
-    const path = join(root, "build", "wrangler.jsonc");
-    const config = JSON.parse(readFileSync(path, "utf8"));
-    config.workers_dev = true;
-    delete config.routes;
-    delete config.vars.PUBLIC_BASE_URL;
-    writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
-  }
   say("✔ Rendered build/");
 
   // 4. Database, then the Worker
@@ -186,22 +195,24 @@ async function main() {
   say(`✔ Deployed "${WORKER}"`);
 
   // 5. Login secrets (only the first time; deploys never delete secrets)
+  const existing = JSON.parse(wrangler(["secret", "list", "--format", "json", "--cwd", "build"]) || "[]").map((s) => s.name);
   if (auth === "password") {
-    const existing = JSON.parse(wrangler(["secret", "list", "--format", "json", "--cwd", "build"]) || "[]").map((s) => s.name);
     if (!existing.includes("ADMIN_PASSWORD")) {
       const password = randomBytes(18).toString("base64url");
+      // Saved locally first, so a failed upload or a crash can never lose it.
+      const file = join(root, ".setup-secrets");
+      writeFileSync(file, `ADMIN_PASSWORD=${password}\n`, { mode: 0o600 });
+      chmodSync(file, 0o600);
       wrangler(["secret", "bulk", "--cwd", "build"], {
         input: JSON.stringify({ AUTH_MODE: "password", ADMIN_PASSWORD: password }),
       });
-      generated.push(`ADMIN_PASSWORD=${password}`);
       say("✔ Set AUTH_MODE and a generated ADMIN_PASSWORD");
+      say("→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
     } else say("✔ ADMIN_PASSWORD exists (left untouched)");
-  }
-  if (generated.length) {
-    const file = join(root, ".setup-secrets");
-    writeFileSync(file, `${generated.join("\n")}\n`, { mode: 0o600 });
-    chmodSync(file, 0o600);
-    say("→ Generated values are in .setup-secrets. Save them in your password manager, then delete the file.");
+  } else if (existing.includes("AUTH_MODE")) {
+    // Switching to Access: an earlier password setting would still take priority.
+    wrangler(["secret", "delete", "AUTH_MODE", "--cwd", "build"], { input: "y\n" });
+    say("✔ Removed the old AUTH_MODE secret so Cloudflare Access is used");
   }
 
   // 6. Workers Builds hand-off (no secrets here)
