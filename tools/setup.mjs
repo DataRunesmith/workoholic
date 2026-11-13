@@ -21,7 +21,7 @@ const BUCKET = "workoholic-evidence";
 const KEY_NAME = "WORKOHOLIC_CONFIG_KEY";
 
 function parseEnv(file) {
-  const values = {};
+  const values = Object.create(null); // no prototype, so a key like __proto__ is just a name
   for (const line of readFileSync(file, "utf8").split("\n")) {
     const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
     if (match) values[match[1]] = match[2].trim();
@@ -37,6 +37,12 @@ if (!token) fail("CLOUDFLARE_API_TOKEN is missing. Put it in setup.env (see setu
 const auth = get("AUTH", "password");
 if (!["password", "access"].includes(auth)) fail("AUTH must be 'password' or 'access'.");
 const host = get("PUBLIC_HOST");
+// Values end up in request headers, URL paths and the rendered config, so only
+// accept the shapes Cloudflare actually uses.
+if (!/^[A-Za-z0-9_-]{20,}$/.test(token)) fail("CLOUDFLARE_API_TOKEN looks malformed (letters, digits, _ and - only).");
+if (host && !/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(host)) fail("PUBLIC_HOST must be a plain hostname such as app.example.com.");
+if (get("CLOUDFLARE_ACCOUNT_ID") && !/^[0-9a-f]{32}$/.test(get("CLOUDFLARE_ACCOUNT_ID"))) fail("CLOUDFLARE_ACCOUNT_ID must be 32 hex characters.");
+if (!/^[a-z0-9][a-z0-9_-]{0,62}$/i.test(get("D1_DATABASE_NAME", "workoholic"))) fail("D1_DATABASE_NAME may only contain letters, digits, _ and -.");
 if (auth === "access" && (!get("CF_ACCESS_TEAM_DOMAIN") || !get("CF_ACCESS_AUD"))) {
   fail("AUTH=access needs CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD.");
 }

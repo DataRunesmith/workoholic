@@ -17,7 +17,7 @@ if (!file) {
   process.exit(2);
 }
 const root = resolve(dirname(new URL(import.meta.url).pathname), "..");
-const secrets = {};
+const secrets = Object.create(null); // no prototype, so a name like __proto__ is just a name
 for (const line of readFileSync(file, "utf8").split("\n")) {
   const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
   if (match) secrets[match[1]] = match[2].replace(/^(["'])(.*)\1$/, "$2");
