@@ -105,7 +105,8 @@ async function main() {
   const databases = await api("GET", `/accounts/${account}/d1/database?name=${encodeURIComponent(dbName)}`);
   let database = databases.find((d) => d.name === dbName);
   let r2Enabled = true;
-  const buckets = await api("GET", `/accounts/${account}/r2/buckets`).catch((error) => {
+  // Filtered by name, so the bucket is found however many others the account has.
+  const buckets = await api("GET", `/accounts/${account}/r2/buckets?name_contains=${encodeURIComponent(BUCKET)}`).catch((error) => {
     if (!String(error).includes("10042")) throw error;
     r2Enabled = false;
     return [];
@@ -208,7 +209,11 @@ async function main() {
       });
       say("✔ Set AUTH_MODE and a generated ADMIN_PASSWORD");
       say("→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
-    } else say("✔ ADMIN_PASSWORD exists (left untouched)");
+    } else if (!existing.includes("AUTH_MODE")) {
+      // The password exists but AUTH_MODE was removed (a switch to Access and back).
+      wrangler(["secret", "bulk", "--cwd", "build"], { input: JSON.stringify({ AUTH_MODE: "password" }) });
+      say("✔ ADMIN_PASSWORD exists (left untouched); set AUTH_MODE=password again");
+    } else say("✔ ADMIN_PASSWORD and AUTH_MODE exist (left untouched)");
   } else if (existing.includes("AUTH_MODE")) {
     // Switching to Access: an earlier password setting would still take priority.
     wrangler(["secret", "delete", "AUTH_MODE", "--cwd", "build"], { input: "y\n" });
@@ -234,7 +239,8 @@ async function main() {
   if (buildsNote) {
     say(`
 ${buildsNote}
-Set these by hand in Workers & Pages → ${WORKER} → Settings → Builds:
+Set these by hand in Workers & Pages → ${WORKER} → Settings → Builds.
+If the build fails at the migration step, select an API token with D1 Edit and Workers Scripts Edit under Settings → Builds → API token (the default build token may lack D1 access).
   Build command : ${BUILD_COMMAND}
   Deploy command: ${DEPLOY_COMMAND}
   Build variables (not secret):
