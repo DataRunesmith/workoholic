@@ -21,16 +21,16 @@ const BUCKET = "workoholic-evidence";
 const KEY_NAME = "WORKOHOLIC_CONFIG_KEY";
 
 function parseEnv(file) {
-  const values = Object.create(null); // no prototype, so a key like __proto__ is just a name
+  const values = new Map(); // a Map has no property names to inject into
   for (const line of readFileSync(file, "utf8").split("\n")) {
     const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
-    if (match) values[match[1]] = match[2].trim();
+    if (match) values.set(match[1], match[2].trim());
   }
   return values;
 }
 
-const fileValues = existsSync(join(root, "setup.env")) ? parseEnv(join(root, "setup.env")) : {};
-const get = (name, fallback = "") => process.env[name] || fileValues[name] || fallback;
+const fileValues = existsSync(join(root, "setup.env")) ? parseEnv(join(root, "setup.env")) : new Map();
+const get = (name, fallback = "") => process.env[name] || fileValues.get(name) || fallback;
 
 const token = get("CLOUDFLARE_API_TOKEN");
 if (!token) fail("CLOUDFLARE_API_TOKEN is missing. Put it in setup.env (see setup.example.env).");
@@ -54,7 +54,12 @@ function fail(message) {
 const say = (message) => console.log(message);
 
 async function api(method, path, body) {
-  const response = await fetch(`${API}${path}`, {
+  // Only ever talk to the Cloudflare API, whatever the path was built from.
+  const url = new URL(`${API}${path}`);
+  if (url.origin !== new URL(API).origin || !/^\/client\/v4\/(user|accounts)(\/|$)/.test(url.pathname)) {
+    throw new Error(`refusing to call ${url.origin}${url.pathname}`);
+  }
+  const response = await fetch(url, {
     method,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),

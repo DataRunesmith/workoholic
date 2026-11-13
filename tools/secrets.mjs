@@ -17,19 +17,21 @@ if (!file) {
   process.exit(2);
 }
 const root = resolve(dirname(new URL(import.meta.url).pathname), "..");
-const secrets = Object.create(null); // no prototype, so a name like __proto__ is just a name
+const secrets = new Map(); // a Map has no property names to inject into
 for (const line of readFileSync(file, "utf8").split("\n")) {
   const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-  if (match) secrets[match[1]] = match[2].replace(/^(["'])(.*)\1$/, "$2");
+  if (match) secrets.set(match[1], match[2].replace(/^(["'])(.*)\1$/, "$2"));
 }
-const names = Object.keys(secrets);
+const names = [...secrets.keys()];
 if (!names.length) {
   console.error(`${file} has no NAME=value lines.`);
   process.exit(1);
 }
+// Built by hand from the Map so no object property is ever written by name.
+const body = `{${[...secrets].map(([name, value]) => `${JSON.stringify(name)}:${JSON.stringify(value)}`).join(",")}}`;
 const run = spawnSync("pnpm", ["exec", "wrangler", "secret", "bulk", "--name", "workoholic"], {
   cwd: root,
-  input: JSON.stringify(secrets),
+  input: body,
   encoding: "utf8",
 });
 if (run.status !== 0) {
