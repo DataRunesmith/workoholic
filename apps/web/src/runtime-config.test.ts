@@ -77,6 +77,18 @@ function env(db: D1Database): RuntimeConfigEnv {
 }
 
 describe("dashboard-managed runtime configuration", () => {
+  it("rejects weak encryption key material before saving secrets", async () => {
+    const state = fakeDb();
+    await expect(
+      saveRuntimeConfiguration(
+        { ...env(state.db), WORKOHOLIC_CONFIG_KEY: "short" },
+        { studentConsultingAutoSubmit: false },
+        "operator@example.test",
+      ),
+    ).rejects.toThrow(/at least 32 UTF-8 bytes/);
+    expect(state.storedRow()).toBeNull();
+  });
+
   it("stores sensitive values encrypted and resolves them for automation", async () => {
     const state = fakeDb();
     const runtimeEnv = env(state.db);
@@ -226,7 +238,7 @@ describe("dashboard-managed runtime configuration", () => {
     expect(resolved.view.suitabilityPolicy).toBe(false);
   });
 
-  it("can recover safely after the OAuth encryption key rotates", async () => {
+  it("refuses to overwrite configuration when the current key cannot decrypt it", async () => {
     const state = fakeDb();
     const original = env(state.db);
 
@@ -242,6 +254,7 @@ describe("dashboard-managed runtime configuration", () => {
       },
       "operator@example.test",
     );
+    const before = state.storedRow();
 
     const rotated: RuntimeConfigEnv = {
       ...original,
@@ -254,24 +267,22 @@ describe("dashboard-managed runtime configuration", () => {
     expect(unreadable.view.studentConsultingCredentials).toBe(false);
     expect(unreadable.env.STUDENTCONSULTING_PASSWORD).toBeUndefined();
 
-    await saveRuntimeConfiguration(
-      rotated,
-      {
-        studentConsulting: {
-          email: "new@example.test",
-          password: "new-password",
+    await expect(
+      saveRuntimeConfiguration(
+        rotated,
+        {
+          studentConsulting: {
+            email: "new@example.test",
+            password: "new-password",
+          },
+          studentConsultingAutoSubmit: true,
+          jobIncludeTerms: "helpdesk",
         },
-        studentConsultingAutoSubmit: true,
-        jobIncludeTerms: "helpdesk",
-      },
-      "operator@example.test",
-    );
+        "operator@example.test",
+      ),
+    ).rejects.toThrow(/decrypt/i);
 
-    const recovered = await resolveRuntimeConfiguration(rotated);
-    expect(recovered.view.managedConfigurationUnreadable).toBe(false);
-    expect(recovered.view.studentConsultingCredentials).toBe(true);
-    expect(recovered.env.STUDENTCONSULTING_EMAIL).toBe("new@example.test");
-    expect(recovered.env.STUDENTCONSULTING_PASSWORD).toBe("new-password");
+    expect(state.storedRow()).toEqual(before);
   });
 
   it("migrates a row encrypted with the previous key and keeps its history", async () => {

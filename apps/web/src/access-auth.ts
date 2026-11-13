@@ -6,6 +6,7 @@ const ASSERTION_HEADER = "cf-access-jwt-assertion";
 const CERT_CACHE_MS = 15 * 60 * 1000;
 const CLOCK_SKEW_SECONDS = 60;
 const FETCH_TIMEOUT_MS = 8_000;
+const FORCED_REFRESH_COOLDOWN_MS = 30_000;
 const TEAM_DOMAIN_PATTERN = /^[a-z0-9-]+\.cloudflareaccess\.com$/;
 const AUD_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -32,6 +33,7 @@ interface CertCache {
 }
 
 let certCache: CertCache | null = null;
+let lastForcedRefresh: { url: string; at: number } | null = null;
 
 export function accessAuthConfigurationState(env: AccessAuthEnv): "ready" | "misconfigured" {
   const team = env.CF_ACCESS_TEAM_DOMAIN?.trim() ?? "";
@@ -49,7 +51,7 @@ export async function authenticatedAccessIdentity(
   const aud = env.CF_ACCESS_AUD!.trim();
 
   const token = request.headers.get(ASSERTION_HEADER);
-  if (!token) return null;
+  if (!token || token.length > 8_192) return null;
   const parts = token.split(".");
   if (parts.length !== 3) return null;
 
@@ -59,6 +61,7 @@ export async function authenticatedAccessIdentity(
     aud?: unknown;
     exp?: unknown;
     nbf?: unknown;
+    iat?: unknown;
     email?: unknown;
     sub?: unknown;
   };
@@ -69,25 +72,57 @@ export async function authenticatedAccessIdentity(
     return null;
   }
 
+  if (
+    !header ||
+    typeof header !== "object" ||
+    Array.isArray(header) ||
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    return null;
+  }
+
   const nowSeconds = Math.floor(now / 1000);
   const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
   if (
     header.alg !== "RS256" ||
     typeof header.kid !== "string" ||
+    !header.kid ||
+    header.kid.length > 256 ||
     payload.iss !== `https://${team}` ||
+    !Array.isArray(audiences) ||
+    audiences.length > 10 ||
     !audiences.includes(aud) ||
     typeof payload.exp !== "number" ||
+    !Number.isSafeInteger(payload.exp) ||
     payload.exp + CLOCK_SKEW_SECONDS <= nowSeconds ||
-    (typeof payload.nbf === "number" && payload.nbf - CLOCK_SKEW_SECONDS > nowSeconds) ||
+    typeof payload.iat !== "number" ||
+    !Number.isSafeInteger(payload.iat) ||
+    payload.iat - CLOCK_SKEW_SECONDS > nowSeconds ||
+    payload.exp <= payload.iat ||
+    (payload.nbf !== undefined &&
+      (typeof payload.nbf !== "number" ||
+        !Number.isSafeInteger(payload.nbf) ||
+        payload.nbf - CLOCK_SKEW_SECONDS > nowSeconds)) ||
     typeof payload.email !== "string" ||
     !payload.email ||
-    typeof payload.sub !== "string"
+    payload.email.length > 320 ||
+    /[\u0000-\u001f\u007f]/.test(payload.email) ||
+    typeof payload.sub !== "string" ||
+    !payload.sub ||
+    payload.sub.length > 512 ||
+    /[\u0000-\u001f\u007f]/.test(payload.sub)
   ) {
     return null;
   }
 
-  const keys = await accessSigningKeys(team, now);
-  const jwk = keys?.find((key) => key.kid === header.kid && key.kty === "RSA");
+  let keys = await accessSigningKeys(team, now);
+  let jwk = keys?.find((key) => key.kid === header.kid && key.kty === "RSA");
+  if (!jwk) {
+    keys = await accessSigningKeys(team, now, true);
+    jwk = keys?.find((key) => key.kid === header.kid && key.kty === "RSA");
+  }
   if (!jwk) return null;
 
   try {
@@ -110,9 +145,17 @@ export async function authenticatedAccessIdentity(
   }
 }
 
-async function accessSigningKeys(team: string, now: number): Promise<AccessJwk[] | null> {
+async function accessSigningKeys(team: string, now: number, forceRefresh = false): Promise<AccessJwk[] | null> {
   const url = `https://${team}/cdn-cgi/access/certs`;
-  if (certCache?.url === url && certCache.expires > now) return certCache.keys;
+  if (!forceRefresh && certCache?.url === url && certCache.expires > now) return certCache.keys;
+  if (
+    forceRefresh &&
+    lastForcedRefresh?.url === url &&
+    now - lastForcedRefresh.at < FORCED_REFRESH_COOLDOWN_MS
+  ) {
+    return certCache?.url === url ? certCache.keys : null;
+  }
+  if (forceRefresh) lastForcedRefresh = { url, at: now };
   try {
     const response = await fetch(url, {
       headers: { accept: "application/json" },
@@ -130,6 +173,7 @@ async function accessSigningKeys(team: string, now: number): Promise<AccessJwk[]
 
 export function resetAccessCertCacheForTests(): void {
   certCache = null;
+  lastForcedRefresh = null;
 }
 
 function decodeText(value: string): string {

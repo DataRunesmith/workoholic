@@ -10,7 +10,6 @@ import {
   normalizeStudentConsultingMatchedJobsUrl,
   normalizeStudentConsultingUrl,
   parseStudentConsultingJobText,
-  buildStudentConsultingPitch,
   StudentConsultingProvider,
 } from "../../../packages/studentconsulting/src/provider";
 
@@ -448,7 +447,7 @@ function applicationsVerificationPage(
   };
 }
 
-function pitchApplicationPage(initialPitch = ""): {
+function pitchApplicationPage(initialPitch = "", redirectTo?: string): {
   page: BrowserPage;
   pitchValue: () => string;
   submitClicks: () => number;
@@ -479,7 +478,9 @@ function pitchApplicationPage(initialPitch = ""): {
         currentUrl =
           new URL(url).pathname === "/signin"
             ? "https://www.studentconsulting.com/sv/profil/"
-            : url;
+            : redirectTo && new URL(url).pathname.startsWith("/sv/lediga-jobb/")
+              ? redirectTo
+              : url;
       },
       url() {
         return currentUrl;
@@ -802,9 +803,8 @@ describe("StudentConsulting application verification", () => {
 });
 
 describe("StudentConsulting application submission guard", () => {
-  it("fills the known required Pitch field with a factual generic motivation", async () => {
+  it("does not invent a required application motivation", async () => {
     const harness = pitchApplicationPage();
-    const job = { ...verificationJob, location: "Stockholm" };
     const provider = new StudentConsultingProvider({
       page: harness.page,
       credentials: {
@@ -818,15 +818,40 @@ describe("StudentConsulting application submission guard", () => {
       autoSubmit: true,
     });
 
-    await expect(provider.apply(job)).resolves.toEqual(
+    await expect(provider.apply(verificationJob)).resolves.toEqual(
       expect.objectContaining({
-        status: "submitted",
-        submissionAttempted: true,
+        status: "failed",
+        submissionAttempted: false,
+        error: expect.stringContaining("APPLICATION_REQUIRES_INPUT"),
       }),
     );
-    expect(harness.pitchValue()).toBe(buildStudentConsultingPitch(job));
-    expect(harness.pitchValue()).toBe("Behöver jobb.");
-    expect(harness.submitClicks()).toBe(1);
+    expect(harness.pitchValue()).toBe("");
+    expect(harness.submitClicks()).toBe(0);
+  });
+
+  it("rejects a job page that redirects outside the trusted StudentConsulting origin", async () => {
+    const harness = pitchApplicationPage("", "https://evil.example/collect");
+    const provider = new StudentConsultingProvider({
+      page: harness.page,
+      credentials: {
+        async getStudentConsultingCredentials() {
+          return {
+            username: "user@example.test",
+            password: ["test", "placeholder"].join("-"),
+          };
+        },
+      },
+      autoSubmit: true,
+    });
+
+    await expect(provider.apply(verificationJob)).resolves.toEqual(
+      expect.objectContaining({
+        status: "failed",
+        submissionAttempted: false,
+        error: expect.stringContaining("STUDENTCONSULTING_JOB_REDIRECTED"),
+      }),
+    );
+    expect(harness.submitClicks()).toBe(0);
   });
 
   it("does not overwrite an existing Pitch value", async () => {
@@ -851,7 +876,7 @@ describe("StudentConsulting application submission guard", () => {
     expect(harness.submitClicks()).toBe(1);
   });
 
-  it("expands the experience question and selects Ingen erfarenhet before submit", async () => {
+  it("expands the experience question but never invents an experience answer", async () => {
     const harness = experienceApplicationPage();
     const provider = new StudentConsultingProvider({
       page: harness.page,
@@ -868,13 +893,14 @@ describe("StudentConsulting application submission guard", () => {
 
     await expect(provider.apply(verificationJob)).resolves.toEqual(
       expect.objectContaining({
-        status: "submitted",
-        submissionAttempted: true,
+        status: "failed",
+        submissionAttempted: false,
+        error: expect.stringContaining("APPLICATION_REQUIRES_INPUT"),
       }),
     );
     expect(harness.experienceExpanded()).toBe(true);
-    expect(harness.noExperienceSelected()).toBe(true);
-    expect(harness.submitClicks()).toBe(1);
+    expect(harness.noExperienceSelected()).toBe(false);
+    expect(harness.submitClicks()).toBe(0);
   });
 
   it("stops before submit when StudentConsulting uses data-val-required", async () => {

@@ -338,12 +338,27 @@ describe("definite not-applied reconciliation", () => {
     expect(fake.sql.some((statement) => statement.includes("applied_at = NULL"))).toBe(true);
   });
 
-  it("does not free a submitted or verified application", async () => {
+  it("releases an interrupted submitted application after a definite not-applied result", async () => {
     const fake = reclassifyDb({
       status: "submitted",
       applied_at: "2026-10-02T12:27:17.152Z",
       verified_at: null,
       slot_state: "submitted",
+    });
+
+    await expect(
+      reclassifyApplicationNotSubmitted(fake.db, "application:studentconsulting:87570"),
+    ).resolves.toBe(true);
+    expect(fake.sql.some((statement) => statement.includes("status IN ('needs_user_action', 'submitted')"))).toBe(true);
+    expect(fake.sql.some((statement) => statement.includes("state IN ('uncertain', 'submitted')"))).toBe(true);
+  });
+
+  it("never releases a verified application", async () => {
+    const fake = reclassifyDb({
+      status: "verified",
+      applied_at: "2026-10-02T12:27:17.152Z",
+      verified_at: "2026-10-02T12:28:00.000Z",
+      slot_state: "verified",
     });
 
     await expect(

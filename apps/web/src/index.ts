@@ -15,7 +15,7 @@ import { ACCESS_LOGOUT_PATH } from "./access-auth";
 import { passwordAuthRoute } from "./password-auth";
 import { renderAuthStyles, renderErrorPage } from "./auth-ui";
 import { readinessResponse } from "./readiness";
-import { requireSameOriginMutation } from "./request-security";
+import { requireSameOriginMutation, requestBodyExceedsLimit } from "./request-security";
 import {
   confirmApplicationNotSubmitted,
   recheckApplicationAttention,
@@ -82,6 +82,22 @@ export default {
       return redirectTo("/");
     }
 
+    const mutationFailure = requireSameOriginMutation(request);
+    if (mutationFailure) return mutationFailure;
+
+    if (
+      request.method !== "GET" &&
+      request.method !== "HEAD" &&
+      request.method !== "OPTIONS" &&
+      url.pathname.startsWith("/api/") &&
+      (await requestBodyExceedsLimit(
+        request,
+        url.pathname === "/api/configuration" ? 128 * 1024 : 1024 * 1024,
+      ))
+    ) {
+      return Response.json({ error: "För stor begäran" }, { status: 413 });
+    }
+
     if (dashboardAuthMode(env) === "password") {
       const authRoute = await passwordAuthRoute(request, env);
       if (authRoute) return authRoute;
@@ -89,9 +105,6 @@ export default {
 
     const authFailure = await authorizeDashboardRequest(request, env);
     if (authFailure) return authFailure;
-
-    const mutationFailure = requireSameOriginMutation(request);
-    if (mutationFailure) return mutationFailure;
 
     if (request.method === "POST" && url.pathname === "/auth/logout") {
       return redirectTo(ACCESS_LOGOUT_PATH);

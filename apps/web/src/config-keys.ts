@@ -23,8 +23,13 @@ export interface ConfigKeys {
 
 export async function resolveConfigKeys(env: ConfigKeyEnv): Promise<ConfigKeys> {
   const current = await resolveSecret(env.WORKOHOLIC_CONFIG_KEY, "WORKOHOLIC_CONFIG_KEY");
-  if (!current) throw new Error("WORKOHOLIC_CONFIG_KEY is required");
+  if (new TextEncoder().encode(current).byteLength < 32) {
+    throw new Error("WORKOHOLIC_CONFIG_KEY must contain at least 32 UTF-8 bytes of key material");
+  }
   const previous = await resolveSecret(env.WORKOHOLIC_CONFIG_KEY_PREVIOUS, "WORKOHOLIC_CONFIG_KEY_PREVIOUS");
+  if (previous && new TextEncoder().encode(previous).byteLength < 32) {
+    throw new Error("WORKOHOLIC_CONFIG_KEY_PREVIOUS must contain at least 32 UTF-8 bytes of key material");
+  }
   return { current, previous: previous && previous !== current ? previous : null };
 }
 

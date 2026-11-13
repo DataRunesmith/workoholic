@@ -1,6 +1,7 @@
 import { dashboardAuthMode, type DashboardAuthEnv } from "./auth";
 import { resolveConfigKeys, type ConfigKeyEnv } from "./config-keys";
 import { runtimeConfigurationMigrationReady } from "./runtime-migration";
+import { passwordLoginRateLimitReady } from "./password-auth";
 
 export interface ReadinessResult {
   status: "ready" | "degraded";
@@ -8,6 +9,7 @@ export interface ReadinessResult {
     database: boolean;
     dashboardAuth: boolean;
     runtimeConfiguration: boolean;
+    passwordLoginRateLimit: boolean;
   };
 }
 
@@ -24,6 +26,8 @@ export async function getReadiness(
   }
 
   const runtimeConfiguration = database ? await runtimeConfigurationMigrationReady(db) : false;
+  const passwordLoginRateLimit =
+    dashboardAuthMode(env) === "password" ? await passwordLoginRateLimitReady(db) : true;
 
   let dashboardAuth = false;
   if (dashboardAuthMode(env) !== "misconfigured") {
@@ -36,11 +40,12 @@ export async function getReadiness(
   }
 
   return {
-    status: database && dashboardAuth && runtimeConfiguration ? "ready" : "degraded",
+    status: database && dashboardAuth && runtimeConfiguration && passwordLoginRateLimit ? "ready" : "degraded",
     checks: {
       database,
       dashboardAuth,
       runtimeConfiguration,
+      passwordLoginRateLimit,
     },
   };
 }

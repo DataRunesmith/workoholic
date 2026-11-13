@@ -24,6 +24,7 @@ import {
   nextAttemptNumber,
   persistJob,
   reclassifyApplicationNotSubmitted,
+  reconcileInterruptedApplications,
   requeueFailedPreSubmitApplication,
   scheduledRunId,
   shouldDelayNotAppliedReclassification,
@@ -414,6 +415,12 @@ async function fillMonthlyApplicationTarget(
             "VERIFICATION_FAILED",
             "StudentConsulting did not show the exact Jobb-ID in Ansökningar.",
           );
+          await setOwnedMonthlyApplicationSlotState(
+            env.DB,
+            applicationId,
+            reservationOwner,
+            "uncertain",
+          );
           await setApplicationStatus(
             env.DB,
             applicationId,
@@ -748,6 +755,7 @@ async function reconcilePendingApplications(
   applicationMonth: string,
   runId: string,
 ): Promise<number> {
+  await reconcileInterruptedApplications(env.DB);
   const pending = await env.DB.prepare(
     `SELECT a.id, a.applied_at, j.raw_json
        FROM applications a
@@ -794,6 +802,13 @@ async function reconcilePendingApplications(
       }
       continue;
     }
+    if (applicationState === "unknown") {
+      await reconcileMonthlyApplicationSlotState(env.DB, row.id, "uncertain");
+      await setApplicationStatus(env.DB, row.id, "needs_user_action", {
+        appliedAt: row.applied_at ?? undefined,
+      });
+      continue;
+    }
     if (applicationState !== "applied") continue;
 
     const verifiedAt = new Date().toISOString();
@@ -827,7 +842,9 @@ async function persistVerificationEvidence(
   verifiedAt: string,
 ): Promise<void> {
   try {
-    const objectKey = `applications/${applicationMonth}/${job.externalId}.json`;
+    const safeExternalId = job.externalId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128);
+    if (!safeExternalId) throw new Error("Invalid external job ID for evidence storage");
+    const objectKey = `applications/${applicationMonth}/${safeExternalId}.json`;
     await env.EVIDENCE.put(
       objectKey,
       JSON.stringify({
@@ -838,12 +855,24 @@ async function persistVerificationEvidence(
       }),
       { httpMetadata: { contentType: "application/json" } },
     );
-    await addEvidence(env.DB, {
-      id: `evidence:${applicationId}`,
-      applicationId,
-      kind: "studentconsulting-verification",
-      objectKey,
-    });
+    try {
+      await addEvidence(env.DB, {
+        id: `evidence:${applicationId}`,
+        applicationId,
+        kind: "studentconsulting-verification",
+        objectKey,
+      });
+    } catch (error) {
+      try {
+        await env.EVIDENCE.delete(objectKey);
+      } catch (cleanupError) {
+        console.error("Failed to clean up unreferenced verification evidence", {
+          applicationId,
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+      }
+      throw error;
+    }
   } catch (error) {
     await recordApplicationDiagnostic(
       env.DB,

@@ -165,12 +165,9 @@ export async function saveRuntimeConfiguration(
   update: RuntimeConfigurationUpdate,
   updatedBy: string,
 ): Promise<void> {
-  let existing: (StoredRuntimeConfiguration & { updatedAt?: string }) | null = null;
-  try {
-    existing = await loadManagedRuntimeConfiguration(env);
-  } catch (error) {
-    if (!(error instanceof RuntimeConfigurationDecryptionError)) throw error;
-  }
+  // A partial dashboard update must never overwrite configuration that
+  // cannot be decrypted (for example after an accidental key change).
+  const existing = await loadManagedRuntimeConfiguration(env);
   const next: StoredRuntimeConfiguration = {
     ...(existing ?? {}),
     v: 1,

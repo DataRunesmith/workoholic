@@ -4,11 +4,12 @@ import { getReadiness, readinessResponse } from "./readiness";
 interface FakeDbOptions {
   databaseOk?: boolean;
   runtimeConfiguration?: boolean;
+  passwordRateLimit?: boolean;
   error?: Error;
 }
 
 function fakeDb(options: FakeDbOptions = {}): D1Database {
-  const { databaseOk = true, runtimeConfiguration = true, error } = options;
+  const { databaseOk = true, runtimeConfiguration = true, passwordRateLimit = true, error } = options;
 
   return {
     prepare(sql: string) {
@@ -20,6 +21,9 @@ function fakeDb(options: FakeDbOptions = {}): D1Database {
           if (error) throw error;
           if (sql.includes("SELECT 1 AS ok")) {
             return { ok: databaseOk ? 1 : 0 };
+          }
+          if (sql.includes("dashboard_login_attempts")) {
+            return passwordRateLimit ? { name: "dashboard_login_attempts" } : null;
           }
           if (sql.includes("runtime_configuration")) {
             return {
@@ -54,6 +58,7 @@ describe("readiness", () => {
         database: true,
         dashboardAuth: true,
         runtimeConfiguration: true,
+        passwordLoginRateLimit: true,
       },
     });
   });
@@ -67,6 +72,7 @@ describe("readiness", () => {
         database: true,
         dashboardAuth: true,
         runtimeConfiguration: false,
+        passwordLoginRateLimit: true,
       },
     });
   });
@@ -87,6 +93,27 @@ describe("readiness", () => {
         database: true,
         dashboardAuth: false,
         runtimeConfiguration: true,
+        passwordLoginRateLimit: true,
+      },
+    });
+  });
+
+  it("fails closed when password mode lacks its atomic login rate-limit migration", async () => {
+    const result = await getReadiness(fakeDb({ passwordRateLimit: false }), {
+      AUTH_MODE: "password",
+      ADMIN_PASSWORD: "correct horse battery",
+      WORKOHOLIC_CONFIG_KEY: {
+        get: async () => "config-key",
+      },
+    });
+
+    expect(result).toEqual({
+      status: "degraded",
+      checks: {
+        database: true,
+        dashboardAuth: true,
+        runtimeConfiguration: true,
+        passwordLoginRateLimit: false,
       },
     });
   });
