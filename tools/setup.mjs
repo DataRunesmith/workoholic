@@ -215,23 +215,65 @@ async function main() {
     say("✔ Removed the old AUTH_MODE secret so Cloudflare Access is used");
   }
 
-  // 6. Workers Builds hand-off (no secrets here)
-  say(`
-Next: connect the repo in Cloudflare (Workers & Pages → ${WORKER} → Settings → Builds).
-  Build command : pnpm install --frozen-lockfile && node tools/render.mjs - build
-  Deploy command: npx wrangler d1 migrations apply DB --remote --cwd build && npx wrangler deploy --cwd build
+  // 6. Workers Builds: set the commands and build variables (none of them secret)
+  const buildVariables = Object.fromEntries(
+    [
+      "PUBLIC_HOST",
+      "D1_DATABASE_NAME",
+      "D1_DATABASE_ID",
+      "SECRETS_STORE_ID",
+      "CF_ACCESS_TEAM_DOMAIN",
+      "CF_ACCESS_AUD",
+      "CONFIG_NAMESPACE",
+      "SITE_FAMILY",
+      "THEME_KEY_PREFIX",
+      "THEME_COOKIE_DOMAIN",
+    ].map((name) => [name, renderEnv[name]]),
+  );
+  const buildsNote = await configureWorkersBuilds(account, buildVariables);
+  if (buildsNote) {
+    say(`
+${buildsNote}
+Set these by hand in Workers & Pages → ${WORKER} → Settings → Builds:
+  Build command : ${BUILD_COMMAND}
+  Deploy command: ${DEPLOY_COMMAND}
   Build variables (not secret):
-    PUBLIC_HOST=${host}
-    D1_DATABASE_NAME=${dbName}
-    D1_DATABASE_ID=${database.uuid}
-    SECRETS_STORE_ID=${store.id}
-    CF_ACCESS_TEAM_DOMAIN=${renderEnv.CF_ACCESS_TEAM_DOMAIN}
-    CF_ACCESS_AUD=${renderEnv.CF_ACCESS_AUD}
-    CONFIG_NAMESPACE=${renderEnv.CONFIG_NAMESPACE}
-    SITE_FAMILY=${renderEnv.SITE_FAMILY}
-    THEME_KEY_PREFIX=${renderEnv.THEME_KEY_PREFIX}
-    THEME_COOKIE_DOMAIN=${renderEnv.THEME_COOKIE_DOMAIN}
-Then delete the setup token in the dashboard (it is only needed for this step).`);
+${Object.entries(buildVariables).map(([name, value]) => `    ${name}=${value}`).join("\n")}`);
+  }
+  say("Then delete the setup token in the dashboard (it is only needed for this step).");
+}
+
+const BUILD_COMMAND = "pnpm install --frozen-lockfile && node tools/render.mjs - build";
+const DEPLOY_COMMAND = "npx wrangler d1 migrations apply DB --remote --cwd build && npx wrangler deploy --cwd build";
+
+// Returns "" when Workers Builds is configured, otherwise why it was not.
+async function configureWorkersBuilds(account, variables) {
+  try {
+    const scripts = await api("GET", `/accounts/${account}/workers/scripts`);
+    const tag = scripts.find((script) => script.id === WORKER)?.tag;
+    if (!tag) return "→ Workers Builds: the Worker's tag was not found.";
+    const triggers = await api("GET", `/accounts/${account}/builds/workers/${encodeURIComponent(tag)}/triggers`);
+    const trigger = triggers[0];
+    if (!trigger) return `→ Workers Builds: no repository is connected yet. Connect it in Workers & Pages → ${WORKER} → Settings → Builds, then run this again.`;
+    if (!/^[0-9a-f-]{36}$/i.test(trigger.trigger_uuid)) return "→ Workers Builds: unexpected trigger ID.";
+    await api("PATCH", `/accounts/${account}/builds/triggers/${trigger.trigger_uuid}`, {
+      build_command: BUILD_COMMAND,
+      deploy_command: DEPLOY_COMMAND,
+      root_directory: "/",
+    });
+    await api(
+      "PATCH",
+      `/accounts/${account}/builds/triggers/${trigger.trigger_uuid}/environment_variables`,
+      Object.fromEntries(Object.entries(variables).map(([name, value]) => [name, { value, is_secret: false }])),
+    );
+    say("✔ Workers Builds: build and deploy commands and build variables are set");
+    return "";
+  } catch (error) {
+    const denied = /HTTP 40[13]/.test(String(error));
+    return denied
+      ? "→ Workers Builds was not configured: the token lacks the Workers CI permission (Workers CI: Edit)."
+      : `→ Workers Builds was not configured: ${error.message}`;
+  }
 }
 
 main().catch((error) => fail(error.message));
