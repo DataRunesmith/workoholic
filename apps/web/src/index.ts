@@ -15,7 +15,7 @@ import { ACCESS_LOGOUT_PATH } from "./access-auth";
 import { passwordAuthRoute } from "./password-auth";
 import { renderAuthStyles, renderErrorPage } from "./auth-ui";
 import { readinessResponse } from "./readiness";
-import { requireSameOriginMutation, requestBodyExceedsLimit } from "./request-security";
+import { requireSameOriginMutation, requestBodyRejection } from "./request-security";
 import {
   confirmApplicationNotSubmitted,
   recheckApplicationAttention,
@@ -23,6 +23,7 @@ import {
 } from "./runner";
 import {
   resolveRuntimeConfiguration,
+  RuntimeConfigurationDecryptionError,
   saveRuntimeConfiguration,
   type RuntimeConfigurationUpdate,
 } from "./runtime-config";
@@ -85,19 +86,6 @@ export default {
     const mutationFailure = requireSameOriginMutation(request);
     if (mutationFailure) return mutationFailure;
 
-    if (
-      request.method !== "GET" &&
-      request.method !== "HEAD" &&
-      request.method !== "OPTIONS" &&
-      url.pathname.startsWith("/api/") &&
-      (await requestBodyExceedsLimit(
-        request,
-        url.pathname === "/api/configuration" ? 128 * 1024 : 1024 * 1024,
-      ))
-    ) {
-      return Response.json({ error: "För stor begäran" }, { status: 413 });
-    }
-
     if (dashboardAuthMode(env) === "password") {
       const authRoute = await passwordAuthRoute(request, env);
       if (authRoute) return authRoute;
@@ -105,6 +93,20 @@ export default {
 
     const authFailure = await authorizeDashboardRequest(request, env);
     if (authFailure) return authFailure;
+
+    // Only authenticated callers get their request bodies read and measured.
+    if (
+      request.method !== "GET" &&
+      request.method !== "HEAD" &&
+      request.method !== "OPTIONS" &&
+      url.pathname.startsWith("/api/")
+    ) {
+      const bodyRejection = await requestBodyRejection(
+        request,
+        url.pathname === "/api/configuration" ? 128 * 1024 : 1024 * 1024,
+      );
+      if (bodyRejection) return bodyRejection;
+    }
 
     if (request.method === "POST" && url.pathname === "/auth/logout") {
       return redirectTo(ACCESS_LOGOUT_PATH);
@@ -191,7 +193,7 @@ export default {
           { headers: { "cache-control": "no-store" } },
         );
       } catch (error) {
-        return jsonError(error, 400);
+        return jsonError(error, error instanceof RuntimeConfigurationDecryptionError ? 500 : 400);
       }
     }
 

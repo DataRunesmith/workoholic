@@ -15,7 +15,7 @@
 // optional overlay directory are copied on top (e.g. your own images). Routes
 // whose pattern ends up empty are dropped from wrangler.jsonc. Deploy with
 //   npx wrangler deploy --cwd <out-dir>   (politiker: --cwd <out-dir>/app)
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   closeSync,
   cpSync,
@@ -40,10 +40,10 @@ if (!valuesFile || !outArg) {
   console.error("usage: node tools/render.mjs <values.env | -> <out-dir> [overlay-dir]");
   process.exit(2);
 }
-const source = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
+const source = realpathSync.native(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
 const requestedOut = resolve(outArg);
 mkdirSync(dirname(requestedOut), { recursive: true });
-const out = resolve(realpathSync(dirname(requestedOut)), basename(requestedOut));
+const out = resolve(realpathSync.native(dirname(requestedOut)), basename(requestedOut));
 let outInfo;
 try {
   outInfo = lstatSync(out);

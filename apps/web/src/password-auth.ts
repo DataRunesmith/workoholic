@@ -1,7 +1,7 @@
 // Self-hosted alternative to Cloudflare Access: AUTH_MODE=password protects the
 // dashboard with ADMIN_PASSWORD and an HMAC-signed session cookie.
 import { renderLoginPage } from "./auth-ui";
-import { requireSameOriginMutation, requestBodyExceedsLimit } from "./request-security";
+import { requireSameOriginMutation, requestBodyRejection } from "./request-security";
 import type { AccessIdentity } from "./access-auth";
 
 export interface PasswordAuthEnv {
@@ -160,17 +160,21 @@ export async function passwordAuthRoute(
   }
   if (pathname === "/auth/login" && request.method === "GET") return renderLoginPage();
   if (pathname === "/auth/login" && request.method === "POST") {
-    if (await requestBodyExceedsLimit(request, MAX_LOGIN_BODY_BYTES))
-      return new Response("För stor begäran", { status: 413, headers: { "cache-control": "no-store" } });
+    const bodyRejection = await requestBodyRejection(request, MAX_LOGIN_BODY_BYTES);
+    if (bodyRejection) return bodyRejection;
 
     let attemptKey: string | null;
     try {
       attemptKey = await reserveLoginAttempt(request, env);
     } catch {
-      return renderLoginPage("Inloggningsskyddet är tillfälligt otillgängligt. Försök igen senare.");
+      return renderLoginPage("Inloggningsskyddet är tillfälligt otillgängligt. Försök igen senare.", 503);
     }
     if (!attemptKey)
-      return renderLoginPage("För många inloggningsförsök. Vänta 15 minuter och försök igen.");
+      return renderLoginPage(
+        "För många inloggningsförsök. Vänta 15 minuter och försök igen.",
+        429,
+        { "retry-after": String(LOGIN_WINDOW_MS / 1000) },
+      );
 
     const form = await request.formData().catch(() => null);
     const given = String(form?.get("password") ?? "");

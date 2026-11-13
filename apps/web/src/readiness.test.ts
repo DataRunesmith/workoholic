@@ -47,7 +47,7 @@ describe("readiness", () => {
   const accessAuth = {
     ...access,
     WORKOHOLIC_CONFIG_KEY: {
-      get: async () => "config-key",
+      get: async () => "config-key-for-tests-0123456789abcdef",
     },
   };
 
@@ -103,7 +103,7 @@ describe("readiness", () => {
       AUTH_MODE: "password",
       ADMIN_PASSWORD: "correct horse battery",
       WORKOHOLIC_CONFIG_KEY: {
-        get: async () => "config-key",
+        get: async () => "config-key-for-tests-0123456789abcdef",
       },
     });
 
@@ -128,7 +128,7 @@ describe("readiness", () => {
   it("fails closed for partial Access configuration", async () => {
     const response = await readinessResponse(fakeDb(), {
       CF_ACCESS_TEAM_DOMAIN: "yourteam.cloudflareaccess.com",
-      WORKOHOLIC_CONFIG_KEY: "config-key",
+      WORKOHOLIC_CONFIG_KEY: "config-key-for-tests-0123456789abcdef",
     });
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toMatchObject({

@@ -15,7 +15,7 @@ const ENCRYPTION_SALT = "__CONFIG_NAMESPACE__/RuntimeConfig/v1";
 const ENCRYPTION_INFO = "d1-runtime-configuration";
 const AAD = new TextEncoder().encode("__CONFIG_NAMESPACE__/runtime-config/v1");
 
-class RuntimeConfigurationDecryptionError extends Error {}
+export class RuntimeConfigurationDecryptionError extends Error {}
 class RuntimeConfigurationStorageUnavailableError extends Error {}
 
 export interface RuntimeConfigValues {

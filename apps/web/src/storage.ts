@@ -492,129 +492,6 @@ export async function reconcileInterruptedApplications(db: D1Database): Promise<
     .prepare(
       `SELECT
          a.id AS application_id,
-         s.reservation_owner,
-         latest.id AS attempt_id,
-         latest.status AS attempt_status,
-         latest.finished_at
-       FROM applications a
-       JOIN monthly_application_slots s ON s.application_id = a.id
-       LEFT JOIN application_attempts latest
-         ON latest.id = (
-           SELECT candidate.id
-           FROM application_attempts candidate
-           WHERE candidate.application_id = a.id
-           ORDER BY candidate.attempt_no DESC
-           LIMIT 1
-         )
-       WHERE a.status = 'applying'
-         AND a.updated_at <= datetime('now', '-5 minutes')
-         AND s.state = 'reserved'`,
-    )
-    .all<{
-      application_id: string;
-      reservation_owner: string;
-      attempt_id: string | null;
-      attempt_status: string | null;
-      finished_at: string | null;
-    }>();
-
-  for (const row of stale) {
-    if (row.attempt_status === "started" && !row.finished_at && row.attempt_id) {
-      await db.batch([
-        db
-          .prepare(
-            `UPDATE application_attempts
-             SET status = 'unknown',
-                 error_code = 'ATTEMPT_INTERRUPTED',
-                 error_message = 'The worker stopped during submission. Verify the application in StudentConsulting before retrying.',
-                 finished_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND status = 'started' AND finished_at IS NULL`,
-          )
-          .bind(row.attempt_id),
-        db
-          .prepare(
-            `UPDATE applications
-             SET status = 'needs_user_action',
-                 applied_at = COALESCE(applied_at, CURRENT_TIMESTAMP),
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND status = 'applying'
-               AND EXISTS (
-                 SELECT 1 FROM application_attempts
-                 WHERE id = ? AND status = 'unknown' AND error_code = 'ATTEMPT_INTERRUPTED'
-               )`,
-          )
-          .bind(row.application_id, row.attempt_id),
-        db
-          .prepare(
-            `UPDATE monthly_application_slots
-             SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP
-             WHERE application_id = ? AND state = 'reserved' AND reservation_owner = ?
-               AND EXISTS (
-                 SELECT 1 FROM applications
-                 WHERE id = ? AND status = 'needs_user_action'
-               )`,
-          )
-          .bind(row.application_id, row.reservation_owner, row.application_id),
-      ]);
-      continue;
-    }
-
-    // No live attempt was created, so the provider was never called and the
-    // reservation can be safely released for a later retry.
-    await db.batch([
-      db
-        .prepare(
-          `INSERT OR IGNORE INTO application_attempts
-           (id, application_id, attempt_no, status, error_code, error_message, finished_at)
-           SELECT ?, ?, COALESCE(MAX(attempt_no), 0) + 1, 'failed',
-                  'WORKER_INTERRUPTED_BEFORE_ATTEMPT',
-                  'The worker stopped before starting the provider attempt; safe to retry.',
-                  CURRENT_TIMESTAMP
-           FROM application_attempts
-           WHERE application_id = ?
-           AND NOT EXISTS (
-             SELECT 1 FROM application_attempts active
-             WHERE active.application_id = ? AND active.status = 'started' AND active.finished_at IS NULL
-           )`,
-        )
-        .bind(
-          `${row.application_id}:attempt:interrupted`,
-          row.application_id,
-          row.application_id,
-          row.application_id,
-        ),
-      db
-        .prepare(
-          `UPDATE applications
-           SET status = 'failed', updated_at = CURRENT_TIMESTAMP
-           WHERE id = ? AND status = 'applying' AND applied_at IS NULL
-             AND EXISTS (
-               SELECT 1 FROM application_attempts
-               WHERE application_id = ? AND error_code = 'WORKER_INTERRUPTED_BEFORE_ATTEMPT'
-             )`,
-        )
-        .bind(row.application_id, row.application_id),
-      db
-        .prepare(
-          `UPDATE monthly_application_slots
-           SET state = 'free', application_id = NULL, reservation_owner = NULL,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE application_id = ? AND state = 'reserved'
-             AND EXISTS (
-               SELECT 1 FROM applications
-               WHERE id = ? AND status = 'failed' AND applied_at IS NULL
-             )`,
-        )
-        .bind(row.application_id, row.application_id),
-    ]);
-  }
-}
-
-export async function reconcileInterruptedApplications(db: D1Database): Promise<void> {
-  const { results: stale } = await db
-    .prepare(
-      `SELECT
-         a.id AS application_id,
          a.applied_at,
          s.reservation_owner,
          latest.id AS attempt_id,
@@ -657,9 +534,12 @@ export async function reconcileInterruptedApplications(db: D1Database): Promise<
                SET error_code = 'WORKER_INTERRUPTED_BEFORE_ATTEMPT',
                    error_message = 'The worker stopped before the next provider attempt; safe to retry.',
                    finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
-               WHERE id = ? AND status = 'failed'`,
+               WHERE id = ? AND status = 'failed'
+                 AND attempt_no = (
+                   SELECT MAX(attempt_no) FROM application_attempts WHERE application_id = ?
+                 )`,
             )
-            .bind(attemptId)
+            .bind(attemptId, row.application_id)
         : db
             .prepare(
               `INSERT OR IGNORE INTO application_attempts
@@ -677,24 +557,32 @@ export async function reconcileInterruptedApplications(db: D1Database): Promise<
             `UPDATE applications
              SET status = 'failed', updated_at = CURRENT_TIMESTAMP
              WHERE id = ? AND status = 'applying' AND applied_at IS NULL
+               AND updated_at <= datetime('now', '-5 minutes')
+               AND EXISTS (
+                 SELECT 1 FROM monthly_application_slots
+                 WHERE application_id = ? AND state = 'reserved' AND reservation_owner IS ?
+               )
                AND EXISTS (
                  SELECT 1 FROM application_attempts
-                 WHERE application_id = ? AND error_code = 'WORKER_INTERRUPTED_BEFORE_ATTEMPT'
+                 WHERE id = ? AND error_code = 'WORKER_INTERRUPTED_BEFORE_ATTEMPT'
+                   AND attempt_no = (
+                     SELECT MAX(attempt_no) FROM application_attempts WHERE application_id = ?
+                   )
                )`,
           )
-          .bind(row.application_id, row.application_id),
+          .bind(row.application_id, row.application_id, row.reservation_owner, attemptId, row.application_id),
         db
           .prepare(
             `UPDATE monthly_application_slots
              SET state = 'free', application_id = NULL, reservation_owner = NULL,
                  updated_at = CURRENT_TIMESTAMP
-             WHERE application_id = ? AND state = 'reserved'
+             WHERE application_id = ? AND state = 'reserved' AND reservation_owner IS ?
                AND EXISTS (
                  SELECT 1 FROM applications
                  WHERE id = ? AND status = 'failed' AND applied_at IS NULL
                )`,
           )
-          .bind(row.application_id, row.application_id),
+          .bind(row.application_id, row.reservation_owner, row.application_id),
       ]);
       continue;
     }
@@ -822,6 +710,41 @@ export async function setApplicationStatus(
     .run();
 }
 
+/**
+ * Mark a still-pending application and its quota slot as uncertain. Does
+ * nothing when the application was verified or settled concurrently, so a stale
+ * "unknown" inspection never overwrites a newer result.
+ */
+export async function markApplicationUncertain(
+  db: D1Database,
+  applicationId: string,
+  appliedAt?: string,
+): Promise<void> {
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE applications
+         SET status = 'needs_user_action',
+             applied_at = COALESCE(?, applied_at),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND verified_at IS NULL
+           AND status IN ('applying','submitted','needs_user_action')`,
+      )
+      .bind(appliedAt ?? null, applicationId),
+    db
+      .prepare(
+        `UPDATE monthly_application_slots
+         SET state = 'uncertain', updated_at = CURRENT_TIMESTAMP
+         WHERE application_id = ? AND state IN ('reserved','submitted','uncertain')
+           AND EXISTS (
+             SELECT 1 FROM applications
+             WHERE id = ? AND status = 'needs_user_action' AND verified_at IS NULL
+           )`,
+      )
+      .bind(applicationId, applicationId),
+  ]);
+}
+
 export async function nextAttemptNumber(db: D1Database, applicationId: string): Promise<number> {
   const row = await db
     .prepare(
@@ -869,14 +792,15 @@ export async function finishAttempt(
 export async function addEvidence(
   db: D1Database,
   input: { id: string; applicationId: string; kind: string; objectKey: string },
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const result = await db
     .prepare(
       `INSERT OR IGNORE INTO evidence (id, application_id, kind, object_key)
        VALUES (?, ?, ?, ?)`,
     )
     .bind(input.id, input.applicationId, input.kind, input.objectKey)
     .run();
+  return Number(result.meta?.changes ?? 0) === 1;
 }
 
 export async function recordNotification(

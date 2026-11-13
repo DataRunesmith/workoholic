@@ -25,6 +25,18 @@ function forbidden(): Response {
   return new Response("Cross-origin mutation rejected.", { status: 403 });
 }
 
+/** 413 when the body is over the limit, 400 when it cannot be read, otherwise null. */
+export async function requestBodyRejection(request: Request, maxBytes: number): Promise<Response | null> {
+  try {
+    if (await requestBodyExceedsLimit(request, maxBytes)) {
+      return Response.json({ error: "För stor begäran" }, { status: 413, headers: { "cache-control": "no-store" } });
+    }
+    return null;
+  } catch {
+    return Response.json({ error: "Begäran kunde inte läsas." }, { status: 400, headers: { "cache-control": "no-store" } });
+  }
+}
+
 export async function requestBodyExceedsLimit(request: Request, maxBytes: number): Promise<boolean> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
     throw new RangeError("maxBytes must be a non-negative safe integer");

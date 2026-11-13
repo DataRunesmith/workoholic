@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveRuntimeConfiguration,
+  RuntimeConfigurationDecryptionError,
   saveRuntimeConfiguration,
   type RuntimeConfigEnv,
 } from "./runtime-config";
@@ -259,7 +260,7 @@ describe("dashboard-managed runtime configuration", () => {
     const rotated: RuntimeConfigEnv = {
       ...original,
       WORKOHOLIC_CONFIG_KEY: {
-        get: async () => "rotated-config-key",
+        get: async () => "rotated-config-key-for-tests-0123456789",
       },
     };
     const unreadable = await resolveRuntimeConfiguration(rotated);
@@ -280,7 +281,7 @@ describe("dashboard-managed runtime configuration", () => {
         },
         "operator@example.test",
       ),
-    ).rejects.toThrow(/decrypt/i);
+    ).rejects.toBeInstanceOf(RuntimeConfigurationDecryptionError);
 
     expect(state.storedRow()).toEqual(before);
   });
@@ -289,7 +290,7 @@ describe("dashboard-managed runtime configuration", () => {
     const state = fakeDb();
     const legacy: RuntimeConfigEnv = {
       ...env(state.db),
-      WORKOHOLIC_CONFIG_KEY: "github-oauth-client-secret",
+      WORKOHOLIC_CONFIG_KEY: "legacy-config-key-for-tests-0123456789",
     };
     await saveRuntimeConfiguration(
       legacy,
@@ -303,8 +304,8 @@ describe("dashboard-managed runtime configuration", () => {
 
     const migrating: RuntimeConfigEnv = {
       ...env(state.db),
-      WORKOHOLIC_CONFIG_KEY: "new-config-key",
-      WORKOHOLIC_CONFIG_KEY_PREVIOUS: { get: async () => "github-oauth-client-secret" },
+      WORKOHOLIC_CONFIG_KEY: "new-config-key-for-tests-0123456789ab",
+      WORKOHOLIC_CONFIG_KEY_PREVIOUS: { get: async () => "legacy-config-key-for-tests-0123456789" },
     };
     const resolved = await resolveRuntimeConfiguration(migrating);
     expect(resolved.view.managedConfigurationUnreadable).toBe(false);
@@ -319,7 +320,7 @@ describe("dashboard-managed runtime configuration", () => {
     // Once re-encrypted, the previous key is no longer needed.
     const currentOnly: RuntimeConfigEnv = {
       ...env(state.db),
-      WORKOHOLIC_CONFIG_KEY: "new-config-key",
+      WORKOHOLIC_CONFIG_KEY: "new-config-key-for-tests-0123456789ab",
     };
     const reread = await resolveRuntimeConfiguration(currentOnly);
     expect(reread.env.STUDENTCONSULTING_PASSWORD).toBe("kept-password");

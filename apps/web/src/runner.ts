@@ -21,6 +21,7 @@ import {
   getApplicationForJob,
   isRetryablePreSubmitFailure,
   listRetryableFailedJobs,
+  markApplicationUncertain,
   nextAttemptNumber,
   persistJob,
   reclassifyApplicationNotSubmitted,
@@ -803,10 +804,7 @@ async function reconcilePendingApplications(
       continue;
     }
     if (applicationState === "unknown") {
-      await reconcileMonthlyApplicationSlotState(env.DB, row.id, "uncertain");
-      await setApplicationStatus(env.DB, row.id, "needs_user_action", {
-        appliedAt: row.applied_at ?? undefined,
-      });
+      await markApplicationUncertain(env.DB, row.id, row.applied_at ?? undefined);
       continue;
     }
     if (applicationState !== "applied") continue;
@@ -844,7 +842,8 @@ async function persistVerificationEvidence(
   try {
     const safeExternalId = job.externalId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128);
     if (!safeExternalId) throw new Error("Invalid external job ID for evidence storage");
-    const objectKey = `applications/${applicationMonth}/${safeExternalId}.json`;
+    // Unique per write, so cleanup below can only ever delete this write's own object.
+    const objectKey = `applications/${applicationMonth}/${safeExternalId}-${crypto.randomUUID()}.json`;
     await env.EVIDENCE.put(
       objectKey,
       JSON.stringify({
@@ -856,12 +855,14 @@ async function persistVerificationEvidence(
       { httpMetadata: { contentType: "application/json" } },
     );
     try {
-      await addEvidence(env.DB, {
+      const registered = await addEvidence(env.DB, {
         id: `evidence:${applicationId}`,
         applicationId,
         kind: "studentconsulting-verification",
         objectKey,
       });
+      // Evidence was already registered by a concurrent reconciliation: drop our duplicate.
+      if (!registered) await env.EVIDENCE.delete(objectKey);
     } catch (error) {
       try {
         await env.EVIDENCE.delete(objectKey);

@@ -103,8 +103,36 @@ describe("password mode", () => {
       at("/auth/login", { method: "POST", body: new URLSearchParams({ password: "wrong" }) }),
       { ...env, DB: blocked.db },
     );
+    expect(response?.status).toBe(429);
+    expect(response?.headers.get("retry-after")).toBe("900");
     expect(await response?.text()).toContain("För många inloggningsförsök");
     expect(blocked.attempts()).toBe(11);
+  });
+
+  it("answers 503 when the rate-limit storage is unavailable", async () => {
+    const response = await passwordAuthRoute(
+      at("/auth/login", { method: "POST", body: new URLSearchParams({ password: "wrong" }) }),
+      { ...env, DB: undefined },
+    );
+    expect(response?.status).toBe(503);
+  });
+
+  it("answers 400 when the request body cannot be read", async () => {
+    const body = new ReadableStream({
+      pull(controller) {
+        controller.error(new Error("socket closed"));
+      },
+    });
+    const response = await passwordAuthRoute(
+      new Request("https://jobb.example/auth/login", {
+        method: "POST",
+        headers: { origin: "https://jobb.example" },
+        body,
+        duplex: "half",
+      } as RequestInit),
+      env,
+    );
+    expect(response?.status).toBe(400);
   });
 
   it("rejects oversized login bodies before parsing form data", async () => {

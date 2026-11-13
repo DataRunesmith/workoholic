@@ -27,9 +27,8 @@ export async function resolveConfigKeys(env: ConfigKeyEnv): Promise<ConfigKeys> 
     throw new Error("WORKOHOLIC_CONFIG_KEY must contain at least 32 UTF-8 bytes of key material");
   }
   const previous = await resolveSecret(env.WORKOHOLIC_CONFIG_KEY_PREVIOUS, "WORKOHOLIC_CONFIG_KEY_PREVIOUS");
-  if (previous && new TextEncoder().encode(previous).byteLength < 32) {
-    throw new Error("WORKOHOLIC_CONFIG_KEY_PREVIOUS must contain at least 32 UTF-8 bytes of key material");
-  }
+  // The previous key is only used to decrypt rows written before rotation, so a
+  // shorter legacy key is accepted here; every write uses the validated current key.
   return { current, previous: previous && previous !== current ? previous : null };
 }
 

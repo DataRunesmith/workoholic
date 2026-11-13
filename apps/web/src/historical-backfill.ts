@@ -3,7 +3,8 @@ import type { StudentConsultingHistoricalApplication } from "../../../packages/s
 import { buildActivityReportText } from "./activity-export";
 import { loadVerifiedReportApplications } from "./report-storage";
 import { withStudentConsultingProvider, type ProviderEnv } from "./providers";
-import { getApplicationForJob, persistJob, reconcileMonthlyApplicationSlotState } from "./storage";
+import { reconcileMonthlyApplicationSlotState } from "./quota";
+import { getApplicationForJob, persistJob } from "./storage";
 
 export interface HistoricalBackfillEnv extends ProviderEnv {
   DB: D1Database;
