@@ -68,30 +68,52 @@ async function api(method, path, body) {
 
 let accountId = ""; // set once the account is known, so wrangler targets the same one
 
-// The child process running right now. Children are started asynchronously so a
-// termination signal is handled at once, and can stop the child, instead of
-// waiting until the child has finished and the next step has started.
-let active;
+// The child process running right now, and whether a termination signal has
+// been received. Children are started asynchronously, each in its own process
+// group, so a signal is handled at once and can stop the whole child tree
+// instead of waiting until the child has finished and the next step has begun.
+let active; // { child, closed }
+let stopping = false;
 
 function run(command, args, { input = "", env = process.env } = {}) {
+  // After a signal nothing new may start, and nothing carries on.
+  if (stopping) return new Promise(() => {});
   return new Promise((resolveRun) => {
-    const child = spawn(command, args, { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
-    active = child;
+    const child = spawn(command, args, { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+    const closed = new Promise((resolveClosed) => child.once("close", resolveClosed));
+    active = { child, closed };
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stderr += chunk));
     child.on("error", (error) => {
       active = undefined;
-      resolveRun({ status: 1, stdout, stderr: `${stderr}${error.message}` });
+      if (!stopping) resolveRun({ status: 1, stdout, stderr: `${stderr}${error.message}` });
     });
     child.on("close", (status) => {
       active = undefined;
-      resolveRun({ status, stdout, stderr });
+      if (!stopping) resolveRun({ status, stdout, stderr });
     });
     child.stdin.on("error", () => {}); // the child may exit before reading its input
     child.stdin.end(input);
   });
+}
+
+// Stop the child and everything it started, and wait until it is gone.
+async function stopChildren() {
+  const current = active;
+  if (!current) return;
+  const signalGroup = (signal) => {
+    try {
+      process.kill(-current.child.pid, signal); // the whole process group
+    } catch {
+      current.child.kill(signal); // no process groups (Windows): the child only
+    }
+  };
+  signalGroup("SIGTERM");
+  const force = setTimeout(() => signalGroup("SIGKILL"), 5000);
+  await current.closed;
+  clearTimeout(force);
 }
 
 // Wrangler reads the token from the environment; it is never put on a command line.
@@ -118,10 +140,13 @@ function takeLock() {
   }
   process.on("exit", () => rmSync(lock, { force: true }));
   // Ctrl+C and termination skip "exit" unless handled, which would leave a stale
-  // lock. Stop the running child first, so no step carries on after the signal.
+  // lock. Stop the child tree and wait for it first, so the lock is only released
+  // once nothing started by this run is still working.
   for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.on(signal, () => {
-      active?.kill("SIGTERM");
+    process.on(signal, async () => {
+      if (stopping) return;
+      stopping = true;
+      await stopChildren();
       process.exit(130);
     });
   }
