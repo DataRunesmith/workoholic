@@ -374,6 +374,7 @@ Thumbs.db
 node_modules/
 build/
 setup.env
+secrets.env
 .setup-secrets
 site/
 site-docs/

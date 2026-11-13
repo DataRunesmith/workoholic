@@ -10,7 +10,7 @@
 // never printed; generated ones go to .setup-secrets (owner-only, git-ignored).
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { writeFileSync, chmodSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,17 +22,9 @@ const BUCKET = "workoholic-evidence";
 const KEY_NAME = "WORKOHOLIC_CONFIG_KEY";
 const KV_TITLE = "workoholic-config"; // holds the non-secret render settings for cloud builds
 
-function parseEnv(file) {
-  const values = new Map(); // a Map has no property names to inject into
-  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
-    const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
-    if (match) values.set(match[1], match[2].trim());
-  }
-  return values;
-}
-
-const fileValues = existsSync(join(root, "setup.env")) ? parseEnv(join(root, "setup.env")) : new Map();
-const get = (name, fallback = "") => process.env[name] || fileValues.get(name) || fallback;
+// Settings come from the environment only. The package script loads setup.env
+// into it with node --env-file-if-exists, so this code reads no file itself.
+const get = (name, fallback = "") => (process.env[name] ?? "").trim() || fallback;
 
 const token = get("CLOUDFLARE_API_TOKEN");
 if (!token) fail("CLOUDFLARE_API_TOKEN is missing. Put it in setup.env (see setup.example.env).");
