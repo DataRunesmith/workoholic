@@ -10,7 +10,7 @@
 // never printed; generated ones go to .setup-secrets (owner-only, git-ignored).
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { writeFileSync, chmodSync } from "node:fs";
+import { writeFileSync, chmodSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,7 +34,7 @@ if (!host) fail("PUBLIC_HOST is missing. Set the hostname the app will be served
 // Values end up in request headers, URL paths and the rendered config, so only
 // accept the shapes Cloudflare actually uses.
 if (!/^[A-Za-z0-9_-]{20,}$/.test(token)) fail("CLOUDFLARE_API_TOKEN looks malformed (letters, digits, _ and - only).");
-if (host && !/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(host)) fail("PUBLIC_HOST must be a plain hostname such as app.example.com.");
+if (!/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(host)) fail("PUBLIC_HOST must be a plain hostname such as app.example.com.");
 if (get("CLOUDFLARE_ACCOUNT_ID") && !/^[0-9a-f]{32}$/.test(get("CLOUDFLARE_ACCOUNT_ID"))) fail("CLOUDFLARE_ACCOUNT_ID must be 32 hex characters.");
 if (!/^[a-z0-9][a-z0-9_-]{0,62}$/i.test(get("D1_DATABASE_NAME", "workoholic"))) fail("D1_DATABASE_NAME may only contain letters, digits, _ and -.");
 if (auth === "access" && (!get("CF_ACCESS_TEAM_DOMAIN") || !get("CF_ACCESS_AUD"))) {
@@ -83,7 +83,20 @@ function wrangler(args, { input, cwd = root } = {}) {
   return run.stdout;
 }
 
+// One run at a time: two runs could otherwise create the same resources, or
+// each generate a different login password for the same Worker.
+function takeLock() {
+  const lock = join(root, ".setup-lock");
+  try {
+    writeFileSync(lock, `${process.pid}\n`, { flag: "wx" });
+  } catch {
+    fail("Another setup run is in progress. If none is, delete .setup-lock and run again.");
+  }
+  process.on("exit", () => rmSync(lock, { force: true }));
+}
+
 async function main() {
+  if (!check) takeLock();
   // 1. Token and account
   const accounts = await api("GET", "/accounts");
   if (accounts.length !== 1 && !get("CLOUDFLARE_ACCOUNT_ID")) {
@@ -177,8 +190,9 @@ async function main() {
   } else say(`✔ ${KEY_NAME} exists (left untouched)`);
 
   // 3. Render
+  // The renderer only needs the settings, not the token or anything else.
   const renderEnv = {
-    ...process.env,
+    PATH: process.env.PATH,
     PUBLIC_HOST: host,
     CF_ACCESS_TEAM_DOMAIN: auth === "access" ? get("CF_ACCESS_TEAM_DOMAIN") : "",
     CF_ACCESS_AUD: auth === "access" ? get("CF_ACCESS_AUD") : "",
@@ -258,7 +272,11 @@ If it cannot read the KV settings (it needs Cloudflare credentials to do so), us
   Build command : pnpm install --frozen-lockfile && node tools/render.mjs - build
 ${Object.entries(buildVariables).map(([name, value]) => `    ${name}=${value}`).join("\n")}`);
   }
-  say("Then delete the setup token in the dashboard (it is only needed for this step).");
+  say(
+    buildsNote
+      ? "Keep the setup token until Workers Builds is configured (run this again once it is), then delete it in the dashboard."
+      : "Done. You can now delete the setup token in the dashboard.",
+  );
 }
 
 const BUILD_COMMAND = `pnpm install --frozen-lockfile && node tools/render.mjs kv:${KV_TITLE} build`;

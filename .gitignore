@@ -376,6 +376,7 @@ build/
 setup.env
 secrets.env
 .setup-secrets
+.setup-lock
 site/
 site-docs/
 .wrangler/
