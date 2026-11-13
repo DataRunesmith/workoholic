@@ -206,10 +206,16 @@ for (const name of readdirSync(source)) {
       filter: (candidate) => keep(candidate) && !lstatSync(candidate).isSymbolicLink(),
     });
 }
-if (overlayArg && existsSync(overlayArg)) {
-  if (lstatSync(overlayArg).isSymbolicLink())
+const overlayDir = overlayArg ? resolve(overlayArg) : "";
+if (overlayDir) {
+  const overlayRoot = trustedRoots.find((root) => overlayDir.startsWith(root + sep));
+  if (!overlayRoot || !overlayDir.startsWith(overlayRoot + sep))
+    throw new Error("The overlay directory must be inside a trusted root.");
+}
+if (overlayDir && existsSync(overlayDir)) {
+  if (lstatSync(overlayDir).isSymbolicLink())
     throw new Error("Overlay directory cannot be a symbolic link.");
-  cpSync(overlayArg, out, {
+  cpSync(overlayDir, out, {
     recursive: true,
     filter: (candidate) => !lstatSync(candidate).isSymbolicLink(),
   });
