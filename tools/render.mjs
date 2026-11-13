@@ -43,25 +43,33 @@ if (!valuesFile || !outArg) {
 }
 const source = realpathSync.native(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
 const requestedOut = resolve(outArg);
-mkdirSync(dirname(requestedOut), { recursive: true });
-const candidateOut = resolve(realpathSync.native(dirname(requestedOut)), basename(requestedOut));
 // The output must sit strictly inside a trusted root: the repository's own
 // generated directories, the temp directory, the current directory, or a root
 // named by RENDER_OUT_ROOT (the container image uses /srv).
-const trustedRoots = [
+const rootCandidates = [
   ...["dist", ".wrangler", "site-docs", "build"].map((name) => join(source, name)),
-  realpathSync.native(tmpdir()),
-  realpathSync.native(process.cwd()),
-  ...(process.env.RENDER_OUT_ROOT ? [realpathSync.native(resolve(process.env.RENDER_OUT_ROOT))] : []),
+  tmpdir(),
+  process.cwd(),
+  ...(process.env.RENDER_OUT_ROOT ? [resolve(process.env.RENDER_OUT_ROOT)] : []),
 ];
-let out = "";
-for (const root of trustedRoots) {
-  if (candidateOut.startsWith(root + sep)) out = candidateOut;
-}
-if (!out)
+const trustedRoots = rootCandidates.flatMap((root) => {
+  try {
+    return [resolve(root), realpathSync.native(root)];
+  } catch {
+    return [resolve(root)];
+  }
+});
+const requestedRoot = trustedRoots.find((root) => requestedOut.startsWith(root + sep));
+if (!requestedRoot || !requestedOut.startsWith(requestedRoot + sep))
   throw new Error(
     "The output directory must be inside the current directory, the temp directory or RENDER_OUT_ROOT.",
   );
+mkdirSync(dirname(requestedOut), { recursive: true });
+const candidateOut = resolve(realpathSync.native(dirname(requestedOut)), basename(requestedOut));
+const outRoot = trustedRoots.find((root) => candidateOut.startsWith(root + sep));
+if (!outRoot || !candidateOut.startsWith(outRoot + sep))
+  throw new Error("The output directory resolves outside the trusted roots.");
+const out = candidateOut;
 let outInfo;
 try {
   outInfo = lstatSync(out);
