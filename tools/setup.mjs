@@ -8,7 +8,7 @@
 // setup.env or the environment (see setup.example.env). Everything else is
 // looked up or generated, and the run can be repeated safely. Secret values are
 // never printed; generated ones go to .setup-secrets (owner-only, git-ignored).
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { writeFileSync, chmodSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -68,19 +68,43 @@ async function api(method, path, body) {
 
 let accountId = ""; // set once the account is known, so wrangler targets the same one
 
+// The child process running right now. Children are started asynchronously so a
+// termination signal is handled at once, and can stop the child, instead of
+// waiting until the child has finished and the next step has started.
+let active;
+
+function run(command, args, { input = "", env = process.env } = {}) {
+  return new Promise((resolveRun) => {
+    const child = spawn(command, args, { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
+    active = child;
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", (error) => {
+      active = undefined;
+      resolveRun({ status: 1, stdout, stderr: `${stderr}${error.message}` });
+    });
+    child.on("close", (status) => {
+      active = undefined;
+      resolveRun({ status, stdout, stderr });
+    });
+    child.stdin.on("error", () => {}); // the child may exit before reading its input
+    child.stdin.end(input);
+  });
+}
+
 // Wrangler reads the token from the environment; it is never put on a command line.
-function wrangler(args, { input, cwd = root } = {}) {
-  const run = spawnSync("pnpm", ["exec", "wrangler", ...args], {
-    cwd,
+async function wrangler(args, { input } = {}) {
+  const result = await run("pnpm", ["exec", "wrangler", ...args], {
     input,
-    encoding: "utf8",
     env: { ...process.env, CLOUDFLARE_API_TOKEN: token, ...(accountId && { CLOUDFLARE_ACCOUNT_ID: accountId }), CI: "1" },
   });
-  if (run.status !== 0) {
-    const text = `${run.stdout}\n${run.stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
+  if (result.status !== 0) {
+    const text = `${result.stdout}\n${result.stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
     throw new Error(`wrangler ${args[0]} ${args[1] ?? ""} failed:\n${text.trim().split("\n").slice(-12).join("\n")}`);
   }
-  return run.stdout;
+  return result.stdout;
 }
 
 // One run at a time: two runs could otherwise create the same resources, or
@@ -93,8 +117,14 @@ function takeLock() {
     fail("Another setup run is in progress. If none is, delete .setup-lock and run again.");
   }
   process.on("exit", () => rmSync(lock, { force: true }));
-  // Ctrl+C and termination skip "exit" unless handled, which would leave a stale lock.
-  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => process.exit(130));
+  // Ctrl+C and termination skip "exit" unless handled, which would leave a stale
+  // lock. Stop the running child first, so no step carries on after the signal.
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      active?.kill("SIGTERM");
+      process.exit(130);
+    });
+  }
 }
 
 async function main() {
@@ -206,7 +236,7 @@ async function main() {
     THEME_KEY_PREFIX: get("THEME_KEY_PREFIX", "workoholic"),
     THEME_COOKIE_DOMAIN: get("THEME_COOKIE_DOMAIN", ""),
   };
-  const render = spawnSync("node", ["tools/render.mjs", "-", "build"], { cwd: root, env: renderEnv, encoding: "utf8" });
+  const render = await run("node", ["tools/render.mjs", "-", "build"], { env: renderEnv });
   if (render.status !== 0) fail(`render failed:\n${render.stderr}`);
   say("✔ Rendered build/");
 
@@ -231,13 +261,13 @@ async function main() {
   say(`✔ Stored the render settings in KV ("${KV_TITLE}", key "settings")`);
 
   // 4. Database, then the Worker
-  wrangler(["d1", "migrations", "apply", "DB", "--remote", "--cwd", "build"]);
+  await wrangler(["d1", "migrations", "apply", "DB", "--remote", "--cwd", "build"]);
   say("✔ Migrations applied");
-  wrangler(["deploy", "--cwd", "build"]);
+  await wrangler(["deploy", "--cwd", "build"]);
   say(`✔ Deployed "${WORKER}"`);
 
   // 5. Login secrets (only the first time; deploys never delete secrets)
-  const existing = JSON.parse(wrangler(["secret", "list", "--format", "json", "--cwd", "build"]) || "[]").map((s) => s.name);
+  const existing = JSON.parse((await wrangler(["secret", "list", "--format", "json", "--cwd", "build"])) || "[]").map((s) => s.name);
   if (auth === "password") {
     if (!existing.includes("ADMIN_PASSWORD")) {
       const password = randomBytes(18).toString("base64url");
@@ -245,19 +275,19 @@ async function main() {
       const file = join(root, ".setup-secrets");
       writeFileSync(file, `ADMIN_PASSWORD=${password}\n`, { mode: 0o600 });
       chmodSync(file, 0o600);
-      wrangler(["secret", "bulk", "--cwd", "build"], {
+      await wrangler(["secret", "bulk", "--cwd", "build"], {
         input: JSON.stringify({ AUTH_MODE: "password", ADMIN_PASSWORD: password }),
       });
       say("✔ Set AUTH_MODE and a generated ADMIN_PASSWORD");
       say("→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
     } else if (!existing.includes("AUTH_MODE")) {
       // The password exists but AUTH_MODE was removed (a switch to Access and back).
-      wrangler(["secret", "bulk", "--cwd", "build"], { input: JSON.stringify({ AUTH_MODE: "password" }) });
+      await wrangler(["secret", "bulk", "--cwd", "build"], { input: JSON.stringify({ AUTH_MODE: "password" }) });
       say("✔ ADMIN_PASSWORD exists (left untouched); set AUTH_MODE=password again");
     } else say("✔ ADMIN_PASSWORD and AUTH_MODE exist (left untouched)");
   } else if (existing.includes("AUTH_MODE")) {
     // Switching to Access: an earlier password setting would still take priority.
-    wrangler(["secret", "delete", "AUTH_MODE", "--cwd", "build"], { input: "y\n" });
+    await wrangler(["secret", "delete", "AUTH_MODE", "--cwd", "build"], { input: "y\n" });
     say("✔ Removed the old AUTH_MODE secret so Cloudflare Access is used");
   }
 
