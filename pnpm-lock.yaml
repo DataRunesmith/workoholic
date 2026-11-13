@@ -171,10 +171,10 @@ importers:
   .:
     devDependencies:
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       wrangler:
-        specifier: ^4.157.0
+        specifier: 4.160.0
         version: 4.160.0
 
   apps/web:
@@ -184,13 +184,13 @@ importers:
         version: 1.3.6
     devDependencies:
       typescript:
-        specifier: ^7.0.2
+        specifier: 7.0.2
         version: 7.0.2
       vitest:
-        specifier: ^5.1.0
+        specifier: 5.1.0
         version: 5.1.0(vite@8.3.7(esbuild@0.28.2))
       wrangler:
-        specifier: ^4.157.0
+        specifier: 4.160.0
         version: 4.160.0
 
 packages:

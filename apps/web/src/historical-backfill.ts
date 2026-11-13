@@ -3,6 +3,7 @@ import type { StudentConsultingHistoricalApplication } from "../../../packages/s
 import { buildActivityReportText } from "./activity-export";
 import { loadVerifiedReportApplications } from "./report-storage";
 import { withStudentConsultingProvider, type ProviderEnv } from "./providers";
+import { reconcileMonthlyApplicationSlotState } from "./quota";
 import { getApplicationForJob, persistJob } from "./storage";
 
 export interface HistoricalBackfillEnv extends ProviderEnv {
@@ -21,7 +22,7 @@ export async function backfillStudentConsultingMonth(
   env: HistoricalBackfillEnv,
   month: string,
 ): Promise<StudentConsultingBackfillResult> {
-  if (!/^\d{4}-\d{2}$/.test(month)) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
     throw new Error("BACKFILL_MONTH_INVALID");
   }
 
@@ -41,7 +42,14 @@ export async function backfillStudentConsultingMonth(
     throw new Error(`STUDENTCONSULTING_BACKFILL_EMPTY: no applications found for ${month}`);
   }
 
-  const ordered = [...history].sort((left, right) => {
+  const uniqueHistory = new Map<string, StudentConsultingHistoricalApplication>();
+  for (const application of history) {
+    if (!/^\d{1,20}$/.test(application.externalId) || !application.title.trim() || application.title.length > 300) {
+      throw new Error("STUDENTCONSULTING_BACKFILL_RECORD_INVALID");
+    }
+    uniqueHistory.set(application.externalId, application);
+  }
+  const ordered = [...uniqueHistory.values()].sort((left, right) => {
     const time = Date.parse(left.applicationTime) - Date.parse(right.applicationTime);
     if (Number.isFinite(time) && time !== 0) return time;
     return left.externalId.localeCompare(right.externalId, "sv");
@@ -78,6 +86,8 @@ export async function backfillStudentConsultingMonth(
     )
       .bind(applicationId, jobId, appliedAt, verifiedAt, month)
       .run();
+
+    await reconcileMonthlyApplicationSlotState(env.DB, applicationId, "verified");
 
     await env.DB.prepare(
       `INSERT OR IGNORE INTO application_attempts
@@ -167,8 +177,14 @@ function normalizeApplicationTime(value: string, month: string): string {
   if (Number.isNaN(parsed.valueOf())) {
     throw new Error(`BACKFILL_APPLICATION_TIME_INVALID: ${value}`);
   }
-  const key = `${parsed.getUTCFullYear()}-${String(parsed.getUTCMonth() + 1).padStart(2, "0")}`;
-  if (key !== month && !value.startsWith(month)) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Stockholm",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(parsed);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const monthPart = parts.find((part) => part.type === "month")?.value;
+  if (`${year}-${monthPart}` !== month) {
     throw new Error(`BACKFILL_APPLICATION_TIME_OUTSIDE_MONTH: ${value}`);
   }
   return parsed.toISOString();

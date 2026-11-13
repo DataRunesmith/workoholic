@@ -15,7 +15,7 @@ const ENCRYPTION_SALT = "__CONFIG_NAMESPACE__/RuntimeConfig/v1";
 const ENCRYPTION_INFO = "d1-runtime-configuration";
 const AAD = new TextEncoder().encode("__CONFIG_NAMESPACE__/runtime-config/v1");
 
-class RuntimeConfigurationDecryptionError extends Error {}
+export class RuntimeConfigurationDecryptionError extends Error {}
 class RuntimeConfigurationStorageUnavailableError extends Error {}
 
 export interface RuntimeConfigValues {
@@ -165,12 +165,9 @@ export async function saveRuntimeConfiguration(
   update: RuntimeConfigurationUpdate,
   updatedBy: string,
 ): Promise<void> {
-  let existing: (StoredRuntimeConfiguration & { updatedAt?: string }) | null = null;
-  try {
-    existing = await loadManagedRuntimeConfiguration(env);
-  } catch (error) {
-    if (!(error instanceof RuntimeConfigurationDecryptionError)) throw error;
-  }
+  // A partial dashboard update must never overwrite configuration that
+  // cannot be decrypted (for example after an accidental key change).
+  const existing = await loadManagedRuntimeConfiguration(env);
   const next: StoredRuntimeConfiguration = {
     ...(existing ?? {}),
     v: 1,

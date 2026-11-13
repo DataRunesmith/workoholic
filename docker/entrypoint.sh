@@ -13,8 +13,8 @@ set -eu
 : "${BROWSER_MODE:=bundled}"
 case "$AUTH_MODE" in
   password)
-    [ "${#ADMIN_PASSWORD}" -ge 8 ] 2>/dev/null ||
-      { echo "AUTH_MODE=password needs ADMIN_PASSWORD (at least 8 characters)." >&2; exit 1; } ;;
+    [ "${#ADMIN_PASSWORD}" -ge 16 ] 2>/dev/null ||
+      { echo "AUTH_MODE=password needs ADMIN_PASSWORD (at least 16 characters)." >&2; exit 1; } ;;
   cloudflare-access)
     [ -n "${CF_ACCESS_TEAM_DOMAIN:-}" ] && [ -n "${CF_ACCESS_AUD:-}" ] ||
       { echo "AUTH_MODE=cloudflare-access needs CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD." >&2; exit 1; } ;;
@@ -50,7 +50,7 @@ sed -n 's/^\([A-Z][A-Z0-9_]*\)=.*/\1/p' "$app/cloudflare.example.env" | while re
   printf '%s=%s\n' "$name" "$(printenv "$name" || true)"
 done >"$values"
 site=/srv/site
-node /opt/app/tools/render.mjs "$values" "$site" >/dev/null
+RENDER_OUT_ROOT=/srv node /opt/app/tools/render.mjs "$values" "$site" >/dev/null
 sed "s/__BROWSER_REMOTE__/$remote/" "$site/docker/wrangler.template.jsonc" >"$site/wrangler.container.jsonc"
 cd "$site"
 

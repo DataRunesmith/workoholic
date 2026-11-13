@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // Renders a deployable copy of this repo with your own values.
 //
-//   node tools/render.mjs <values.env | -> <out-dir> [overlay-dir]
+//   node tools/render.mjs <values.env | - | kv:NAMESPACE> <out-dir>
+//
+// "kv:NAMESPACE" reads the values from a Workers KV namespace (written by
+// pnpm setup:cloudflare), so a Cloudflare build needs no build variables.
 //
 // The repo holds only placeholders (__NAME__). Every NAME listed in
 // cloudflare.example.env must have a value in <values.env> (it may be empty);
@@ -9,31 +12,100 @@
 // the values are read from environment variables instead, e.g. the build
 // variables of Cloudflare Workers Builds or a container's environment.
 // Values may use \n for line breaks, or "@path" to read a file. Files in the
-// optional overlay directory are copied on top (e.g. your own images). Routes
-// whose pattern ends up empty are dropped from wrangler.jsonc. Deploy with
+// repository are copied into <out-dir>. Routes
+// whose pattern ends up empty, and Secrets Store bindings whose store id ends
+// up empty, are dropped from wrangler.jsonc. Deploy with
 //   npx wrangler deploy --cwd <out-dir>   (politiker: --cwd <out-dir>/app)
+// tools/deploy.sh renders and deploys in one step.
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   closeSync,
   cpSync,
   existsSync,
+  lstatSync,
+  mkdirSync,
   fstatSync,
   ftruncateSync,
   openSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   symlinkSync,
   writeSync,
 } from "node:fs";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 
-const [valuesFile, outArg, overlayArg] = process.argv.slice(2);
+const [valuesFile, outArg] = process.argv.slice(2);
 if (!valuesFile || !outArg) {
-  console.error("usage: node tools/render.mjs <values.env | -> <out-dir> [overlay-dir]");
+  console.error("usage: node tools/render.mjs <values.env | -> <out-dir>");
   process.exit(2);
 }
-const source = resolve(dirname(new URL(import.meta.url).pathname), "..");
-const out = resolve(outArg);
+const source = realpathSync.native(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
+const requestedOut = resolve(outArg);
+// The output must sit strictly inside a trusted root: the repository's own
+// generated directories, the temp directory, the current directory, or a root
+// named by RENDER_OUT_ROOT (the container image uses /srv).
+const rootCandidates = [
+  ...["dist", ".wrangler", "site-docs", "build"].map((name) => join(source, name)),
+  tmpdir(),
+  process.cwd(),
+  ...(process.env.RENDER_OUT_ROOT ? [resolve(process.env.RENDER_OUT_ROOT)] : []),
+];
+const trustedRoots = rootCandidates.flatMap((root) => {
+  try {
+    return [resolve(root), realpathSync.native(root)];
+  } catch {
+    return [resolve(root)];
+  }
+});
+const requestedRoot = trustedRoots.find((root) => requestedOut.startsWith(root + sep));
+if (!requestedRoot || !requestedOut.startsWith(requestedRoot + sep))
+  throw new Error(
+    "The output directory must be inside the current directory, the temp directory or RENDER_OUT_ROOT.",
+  );
+mkdirSync(dirname(requestedOut), { recursive: true });
+const candidateOut = resolve(realpathSync.native(dirname(requestedOut)), basename(requestedOut));
+const outRoot = trustedRoots.find((root) => candidateOut.startsWith(root + sep));
+if (!outRoot || !candidateOut.startsWith(outRoot + sep))
+  throw new Error("The output directory resolves outside the trusted roots.");
+const out = candidateOut;
+let outInfo;
+try {
+  outInfo = lstatSync(out);
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+if (outInfo?.isSymbolicLink()) throw new Error("Refusing to replace a symbolic-link output path.");
+if (outInfo && !outInfo.isDirectory()) throw new Error("Output path exists and is not a directory.");
+
+const isWithin = (parent, candidate) => {
+  const rel = relative(parent, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+};
+if (isWithin(out, source))
+  throw new Error("Output path cannot be the source directory or one of its parent directories.");
+if (isWithin(source, out)) {
+  const outputRelative = relative(source, out);
+  const outputRoot = outputRelative.split(sep)[0];
+  if (!["dist", ".wrangler", "site-docs", "build"].includes(outputRoot))
+    throw new Error("An output directory inside the repository must be a dedicated generated directory.");
+  try {
+    execFileSync("git", ["check-ignore", "--quiet", "--no-index", "--", outputRelative], {
+      cwd: source,
+      stdio: "ignore",
+    });
+  } catch {
+    throw new Error("An output directory inside the repository must be ignored by Git.");
+  }
+  const trackedFiles = execFileSync("git", ["ls-files", "--", outputRelative], {
+    cwd: source,
+    encoding: "utf8",
+  }).trim();
+  if (trackedFiles) throw new Error("Refusing to delete tracked files from the output directory.");
+}
 const SKIP = new Set(["node_modules", ".wrangler", "dist", ".dev.vars", ".git", ".github"]);
 const TEXT = new Set([
   ".js",
@@ -56,22 +128,63 @@ const TEXT = new Set([
   "",
 ]);
 
-function parseEnv(file) {
+const readRoots = [...trustedRoots, source];
+function parseEnv(requestedFile) {
+  const file = resolve(requestedFile);
+  const fileRoot = readRoots.find((root) => file.startsWith(root + sep));
+  if (!fileRoot || !file.startsWith(fileRoot + sep))
+    throw new Error("The values file must be inside the current directory, the temp directory or RENDER_OUT_ROOT.");
   const values = new Map();
   for (const line of readFileSync(file, "utf8").split("\n")) {
     const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
     if (!match) continue;
     let value = match[2];
-    if (value.startsWith("@"))
-      value = readFileSync(resolve(dirname(file), value.slice(1)), "utf8").trimEnd();
+    if (value.startsWith("@")) {
+      const referenced = resolve(dirname(file), value.slice(1));
+      const referencedRoot = readRoots.find((root) => referenced.startsWith(root + sep));
+      if (!referencedRoot || !referenced.startsWith(referencedRoot + sep))
+        throw new Error("A referenced file must be inside a trusted root.");
+      value = readFileSync(referenced, "utf8").trimEnd();
+    }
     values.set(match[1], value.replace(/\\n/g, "\n"));
   }
   return values;
 }
 
+// "kv:<namespace title>" reads the values from the key "settings" (a JSON
+// object) in a Workers KV namespace, using the credentials wrangler finds in
+// the environment (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID).
+function wranglerJson(args) {
+  const run = spawnSync("pnpm", ["exec", "wrangler", ...args], { cwd: source, encoding: "utf8" });
+  if (run.status !== 0) {
+    const text = `${run.stdout}${run.stderr}`.replace(/\x1b\[[0-9;]*m/g, "").trim();
+    console.error(
+      `wrangler ${args.slice(0, 3).join(" ")} failed (does the build have Cloudflare credentials?):\n${text.split("\n").slice(-8).join("\n")}`,
+    );
+    process.exit(1);
+  }
+  // Skip any banner lines: the JSON starts at the first line that opens with [ or {.
+  const start = run.stdout.search(/^[[{]/m);
+  return JSON.parse(run.stdout.slice(start < 0 ? 0 : start));
+}
+
+function readKvValues(title) {
+  const namespace = wranglerJson(["kv", "namespace", "list"]).find((item) => item.title === title);
+  if (!namespace) {
+    console.error(`KV namespace "${title}" was not found. Run pnpm setup:cloudflare first.`);
+    process.exit(1);
+  }
+  const settings = wranglerJson(["kv", "key", "get", "settings", "--namespace-id", namespace.id, "--remote"]);
+  return new Map(
+    declared.filter((name) => typeof settings[name] === "string").map((name) => [name, settings[name]]),
+  );
+}
+
 const declared = [...parseEnv(join(source, "cloudflare.example.env")).keys()];
-const values =
-  valuesFile === "-"
+const fromKv = valuesFile.startsWith("kv:");
+const values = fromKv
+  ? readKvValues(valuesFile.slice(3))
+  : valuesFile === "-"
     ? new Map(
         declared
           .filter((name) => name in process.env)
@@ -81,26 +194,30 @@ const values =
 const missing = declared.filter((name) => !values.has(name));
 if (missing.length) {
   console.error(
-    `${valuesFile === "-" ? "the environment" : valuesFile} is missing: ${missing.join(", ")}`,
+    `${valuesFile === "-" ? "the environment" : fromKv ? `the KV settings (${valuesFile})` : valuesFile} is missing: ${missing.join(", ")}`,
   );
   process.exit(1);
 }
 
+// Only a dedicated generated output directory (or a path outside the repo)
+// may be replaced. The path and its parent have been canonicalized above.
 rmSync(out, { recursive: true, force: true });
-// The output may sit inside the repo (e.g. build/), so copy entry by entry and
-// never into itself.
-const keep = (path) =>
-  path !== out &&
-  !path.startsWith(out + "/") &&
-  !relative(source, path)
-    .split("/")
-    .some((part) => SKIP.has(part));
+mkdirSync(out, { recursive: true });
+const keep = (path) => {
+  const outRelative = relative(out, path);
+  const isOutput = outRelative === "" ||
+    (outRelative !== ".." && !outRelative.startsWith(`..${sep}`) && !isAbsolute(outRelative));
+  const sourceRelative = relative(source, path);
+  return !isOutput && !sourceRelative.split(sep).some((part) => SKIP.has(part));
+};
 for (const name of readdirSync(source)) {
   const path = join(source, name);
-  if (keep(path)) cpSync(path, join(out, name), { recursive: true, filter: keep });
+  if (keep(path))
+    cpSync(path, join(out, name), {
+      recursive: true,
+      filter: (candidate) => keep(candidate) && !lstatSync(candidate).isSymbolicLink(),
+    });
 }
-if (overlayArg && existsSync(overlayArg)) cpSync(overlayArg, out, { recursive: true });
-
 // Dependencies stay in the repo; link them instead of copying.
 (function linkModules(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -114,7 +231,7 @@ if (overlayArg && existsSync(overlayArg)) cpSync(overlayArg, out, { recursive: t
     const path = join(dir, entry.name);
     if (entry.name === "node_modules") {
       symlinkSync(path, join(out, relative(source, path)));
-    } else if (relative(source, path).split("/").length < 3) {
+    } else if (relative(source, path).split(sep).length < 3) {
       linkModules(path);
     }
   }
@@ -134,12 +251,22 @@ let replaced = 0;
     // cannot be swapped between them.
     const fd = openSync(path, "r+");
     try {
-      if (fstatSync(fd).size > 5_000_000) continue;
+      const descriptorInfo = fstatSync(fd);
+      const pathInfo = lstatSync(path);
+      if (
+        !descriptorInfo.isFile() ||
+        !pathInfo.isFile() ||
+        pathInfo.isSymbolicLink() ||
+        descriptorInfo.dev !== pathInfo.dev ||
+        descriptorInfo.ino !== pathInfo.ino ||
+        descriptorInfo.size > 5_000_000
+      ) continue;
       let text = readFileSync(fd, "utf8");
       const before = text;
       for (const name of declared) text = text.split(`__${name}__`).join(values.get(name));
       if (entry.name === "wrangler.jsonc") {
         text = text.replace(/\{\s*"pattern":\s*""[^}]*\},?\s*/g, "");
+        text = text.replace(/\{[^{}]*"store_id":\s*""[^{}]*\},?\s*/g, "");
       }
       if (text !== before) {
         // writeSync may write less than asked, so loop until every byte is out.

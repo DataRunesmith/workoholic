@@ -26,6 +26,16 @@ export interface EmailDelivery {
   error?: string;
 }
 
+function base64EncodeUtf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  const chunkSize = 32 * 1024;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
 const EMAIL_PATTERN = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
 
 /** Comma, semicolon or newline separated; duplicates dropped, order kept. */
@@ -73,7 +83,7 @@ export async function sendActivityExportEmail(
       row.content_text,
     attachments: [
       {
-        content: btoa(String.fromCharCode(...new TextEncoder().encode(row.content_text))),
+        content: base64EncodeUtf8(row.content_text),
         filename,
         type: "text/plain",
         disposition: "attachment" as const,
