@@ -93,6 +93,8 @@ function takeLock() {
     fail("Another setup run is in progress. If none is, delete .setup-lock and run again.");
   }
   process.on("exit", () => rmSync(lock, { force: true }));
+  // Ctrl+C and termination skip "exit" unless handled, which would leave a stale lock.
+  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => process.exit(130));
 }
 
 async function main() {
