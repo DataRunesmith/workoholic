@@ -133,7 +133,13 @@ async function main() {
   const keyBlocked = !hasKey && Boolean(database) && !get("ALLOW_NEW_CONFIG_KEY");
   const keyBlockedMessage = `D1 database "${dbName}" already exists but ${KEY_NAME} was not found in any Secrets Store. A new key could not decrypt settings saved earlier. Restore the old key, or set ALLOW_NEW_CONFIG_KEY=1 in setup.env if the database holds no saved settings.`;
 
-  let kv = (await api("GET", `/accounts/${account}/storage/kv/namespaces?per_page=100`)).find((item) => item.title === KV_TITLE);
+  // Every page of namespaces, so an existing one is never missed.
+  let kv;
+  for (let page = 1; !kv; page++) {
+    const namespaces = await api("GET", `/accounts/${account}/storage/kv/namespaces?per_page=100&page=${page}`);
+    kv = namespaces.find((item) => item.title === KV_TITLE);
+    if (namespaces.length < 100) break;
+  }
 
   if (check) {
     say(`Would ${database ? "reuse" : "create"} D1 database "${dbName}"`);
