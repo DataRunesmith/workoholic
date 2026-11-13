@@ -33,6 +33,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const [valuesFile, outArg, overlayArg] = process.argv.slice(2);
@@ -78,6 +79,19 @@ if (isWithin(source, out)) {
   }).trim();
   if (trackedFiles) throw new Error("Refusing to delete tracked files from the output directory.");
 }
+// The output must sit strictly inside a trusted root: the repository's own
+// generated directories, the temp directory, the current directory, or a root
+// named by RENDER_OUT_ROOT (the container image uses /srv).
+const trustedRoots = [
+  ...["dist", ".wrangler", "site-docs", "build"].map((name) => join(source, name)),
+  realpathSync.native(tmpdir()),
+  realpathSync.native(process.cwd()),
+  ...(process.env.RENDER_OUT_ROOT ? [realpathSync.native(resolve(process.env.RENDER_OUT_ROOT))] : []),
+];
+if (!trustedRoots.some((root) => out.startsWith(root + sep)))
+  throw new Error(
+    "The output directory must be inside the current directory, the temp directory or RENDER_OUT_ROOT.",
+  );
 const SKIP = new Set(["node_modules", ".wrangler", "dist", ".dev.vars", ".git", ".github"]);
 const TEXT = new Set([
   ".js",

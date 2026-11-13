@@ -50,7 +50,7 @@ sed -n 's/^\([A-Z][A-Z0-9_]*\)=.*/\1/p' "$app/cloudflare.example.env" | while re
   printf '%s=%s\n' "$name" "$(printenv "$name" || true)"
 done >"$values"
 site=/srv/site
-node /opt/app/tools/render.mjs "$values" "$site" >/dev/null
+RENDER_OUT_ROOT=/srv node /opt/app/tools/render.mjs "$values" "$site" >/dev/null
 sed "s/__BROWSER_REMOTE__/$remote/" "$site/docker/wrangler.template.jsonc" >"$site/wrangler.container.jsonc"
 cd "$site"
 
