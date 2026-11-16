@@ -3,3 +3,10 @@ queue_rules:
     merge_method: squash
     merge_conditions:
       - check-success = test
+pull_request_rules:
+  - name: Keep PRs up to date
+    conditions:
+      - -draft
+      - "#commits-behind >= 1"
+    actions:
+      update: null
