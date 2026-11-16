@@ -3,3 +3,12 @@ queue_rules:
     merge_method: squash
     merge_conditions:
       - check-success = test
+pull_request_rules:
+  - name: Label by file path
+    conditions:
+      - or:
+          - files ~= ^frontend/
+    actions:
+      label:
+        add:
+          - area/frontend
