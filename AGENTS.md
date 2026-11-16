@@ -52,6 +52,7 @@ Before pushing:
 - Address all known actionable defects and review findings. Do not dismiss findings merely because they are inconvenient, difficult to reproduce, or outside the immediate scope of the change.
 - Verify that tests actually exercise the changed behavior and that passing checks are not being mistaken for proof that the implementation is defect-free.
 - Inspect the final diff once more after all fixes and checks.
+- Run `/security-review` on the full diff before every push and fix every finding. Look in particular for secrets or passwords written to logs and for conditions controlled by environment input.
 
 Do not push incomplete, inadequately reviewed, knowingly defective, or questionable code simply to make progress or obtain feedback from CI or reviewers. CI, CodeRabbit, CodeQL, and human review are additional safeguards, not substitutes for doing the engineering work before pushing.
 
@@ -61,7 +62,7 @@ If a required check cannot be run, or a finding cannot be resolved, do not silen
 
 ### 3. No PR activity subscriptions
 
-Do not subscribe to GitHub activity on pull requests (for example with `subscribe_pr_activity`), and do not start background monitors or polling loops to watch a PR. Check a PR's state only when asked, or once when it is directly needed to finish the task. If a subscription already exists, unsubscribe from it.
+Do not subscribe to GitHub activity on pull requests (for example with `subscribe_pr_activity`), and do not start background monitors or polling loops to watch a PR. Check a PR's state only when asked, or once when it is directly needed to finish the task. If a subscription already exists, unsubscribe from it. This holds however the subscription was created: when notifications arrive from a subscribed PR, unsubscribe at once instead of ignoring them.
 
 ## Reporting and context
 
