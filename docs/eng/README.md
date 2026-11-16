@@ -102,6 +102,7 @@ The same can be done by hand under Settings → Secrets and variables → Action
 In the Cloudflare dashboard, create a Worker named `workoholic` from your repository (Workers & Pages → Create → Import a repository) and set:
 
 - Deploy command: `sh tools/deploy.sh`
+- Or change nothing: with the default `npx wrangler deploy` and the API token Cloudflare creates, the build itself creates the D1 database, the Secrets Store key and the KV settings, fills in the placeholders and applies migrations (`postinstall` runs `tools/setup.mjs --workers-build`, only inside Workers Builds). The Worker is served on its workers.dev address with password login; the generated password is in the KV namespace `workoholic-config`, key `first-login` (save it, then delete the key). Set the build variable `PUBLIC_HOST` to use your own domain instead.
 - Build variables and secrets: every name from the table above with your value
 - API token: the token you created above; the token Cloudflare creates by itself cannot apply D1 migrations or bind the Secrets Store
 - Settings → Build → Branch control: turn off Enable Preview Builds
