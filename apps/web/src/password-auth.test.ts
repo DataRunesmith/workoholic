@@ -117,7 +117,7 @@ describe("password mode", () => {
     expect(response?.status).toBe(429);
     expect(response?.headers.get("retry-after")).toBe("900");
     expect(await response?.text()).toContain("För många inloggningsförsök");
-    expect(blocked.attempts()).toBe(12);
+    expect(blocked.attempts()).toBe(11);
   });
 
   it("uses a larger shared bucket when no client IP is known", async () => {
@@ -163,6 +163,7 @@ describe("password mode", () => {
       { ...env, DB: failing },
     );
     expect(failed?.status).toBe(503);
+    expect(failed?.headers.get("set-cookie")).toBe(null);
     const broken = { prepare: () => { throw new Error("down"); } } as unknown as D1Database;
     expect(await passwordIdentity(at("/", { headers: { cookie } }), { ...env, DB: broken })).toBe(null);
   });

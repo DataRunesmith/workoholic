@@ -15,10 +15,12 @@ const SESSION_COOKIE = "jobb_session";
 const SESSION_SECONDS = 12 * 60 * 60;
 const MIN_PASSWORD_LENGTH = 16;
 const MAX_LOGIN_BODY_BYTES = 8 * 1024;
-// Without a client IP (self-hosted) every client shares one bucket, so its limit
-// is higher: a handful of bad requests must not lock the admin out.
+// Each client IP has its own bucket. Every attempt also counts against one global
+// bucket, so a forged IP header cannot buy unlimited tries; it is large when an IP
+// is known (a flood must not lock the admin out cheaply) and smaller without one.
 const MAX_LOGIN_ATTEMPTS_PER_IP = 10;
 const MAX_LOGIN_ATTEMPTS_SHARED = 100;
+const MAX_LOGIN_ATTEMPTS_GLOBAL = 1000;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const encoder = new TextEncoder();
 
@@ -179,18 +181,21 @@ async function countAttempt(db: D1Database, key: string, limit: number): Promise
 }
 
 /**
- * Every attempt counts against a global bucket, so a forged client-IP header
- * cannot buy unlimited tries; with an IP it also counts against that IP's own
- * bucket. Returns the key to clear after a successful login, or null if blocked.
+ * Every attempt that is not already blocked counts against a global bucket, so a
+ * forged client-IP header cannot buy unlimited tries; with an IP it first counts
+ * against that IP's own bucket. Returns the key to clear after a successful login, or null if blocked.
  */
 async function reserveLoginAttempt(request: Request, env: PasswordAuthEnv): Promise<string | null> {
   const db = env.DB;
   if (!db) throw new Error("Password login rate-limit storage is unavailable");
   const ip = request.headers.get("CF-Connecting-IP")?.trim() ?? "";
   const shared = await bucketKey("unknown");
-  const sharedOk = await countAttempt(db, shared, MAX_LOGIN_ATTEMPTS_SHARED);
+  // A client that is already blocked does not use up the global budget.
   const ipKey = ip ? await bucketKey(ip) : shared;
   const ipOk = ip ? await countAttempt(db, ipKey, MAX_LOGIN_ATTEMPTS_PER_IP) : true;
+  const sharedOk = ipOk
+    ? await countAttempt(db, shared, ip ? MAX_LOGIN_ATTEMPTS_GLOBAL : MAX_LOGIN_ATTEMPTS_SHARED)
+    : true;
   await db.prepare("DELETE FROM dashboard_login_attempts WHERE window_started_at < ?")
     .bind(Date.now() - 24 * 60 * 60 * 1000)
     .run()
@@ -282,7 +287,7 @@ export async function passwordAuthRoute(
     if (!revoked) {
       return new Response("Utloggningen kunde inte slutföras. Försök igen.", {
         status: 503,
-        headers: { "content-type": "text/plain; charset=utf-8", "set-cookie": `${SESSION_COOKIE}=; ${cookieAttributes(request, env, 0)}` },
+        headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }
     return new Response(null, {
