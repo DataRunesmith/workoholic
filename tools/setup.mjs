@@ -78,6 +78,19 @@ async function api(method, path, body) {
   return json.result;
 }
 
+// Reads (no value) or writes (value) a plain-text KV entry; "" when it is absent.
+async function kvText(path, value) {
+  if (!/^\/accounts\/[0-9a-f]{32}\/storage\/kv\/namespaces\/[0-9a-f]{32}\/values\/[a-z-]+$/.test(path)) throw new Error("unexpected KV path");
+  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+    method: value === undefined ? "GET" : "PUT",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "text/plain" },
+    body: value,
+  });
+  if (value === undefined && response.status === 404) return "";
+  if (!response.ok) throw new Error(`KV ${value === undefined ? "read" : "write"} failed (HTTP ${response.status})`);
+  return value === undefined ? (await response.text()).trim() : value;
+}
+
 let accountId = ""; // set once the account is known, so wrangler targets the same one
 
 // The child process running right now, and whether a termination signal has
@@ -261,7 +274,12 @@ async function main() {
   // 3. Render
   let workersDev = false;
   if (!host) {
-    const { subdomain } = await api("GET", `/accounts/${account}/workers/subdomain`).catch(() => ({}));
+    if (auth === "access") fail("Cloudflare Access login needs your own domain: set PUBLIC_HOST as a build variable.");
+    // Only a confirmed missing subdomain (code 10007) counts as missing configuration.
+    const { subdomain } = await api("GET", `/accounts/${account}/workers/subdomain`).catch((error) => {
+      if (!String(error).includes("10007")) throw error;
+      return {};
+    });
     if (!subdomain) fail("PUBLIC_HOST is not set and the account has no workers.dev subdomain. Set PUBLIC_HOST as a build variable, or enable workers.dev under Workers & Pages.");
     host = `${WORKER}.${subdomain}.workers.dev`;
     workersDev = true;
@@ -331,24 +349,45 @@ async function main() {
   }
 
   // 5. Login secrets (only the first time; deploys never delete secrets)
+  // A Worker that has never been deployed cannot hold secrets yet. In a build
+  // that is not an error: the deploy that follows creates it and the next
+  // build sets them.
+  if (workersBuild) {
+    try {
+      await loginSecrets();
+    } catch (error) {
+      say(`→ Login secrets were not set this time (${String(error.message).split("\n")[0]}). The next build tries again.`);
+    }
+    return;
+  }
+  await loginSecrets();
+
+  async function loginSecrets() {
   const existing = JSON.parse((await wrangler(["secret", "list", "--format", "json", ...cwd])) || "[]").map((s) => s.name);
   if (auth === "password") {
     if (!existing.includes("ADMIN_PASSWORD")) {
-      const password = randomBytes(18).toString("base64url");
-      // Saved locally first, so a failed upload or a crash can never lose it.
-      const file = join(root, ".setup-secrets");
-      writeFileSync(file, `ADMIN_PASSWORD=${password}\n`, { mode: 0o600 });
-      chmodSync(file, 0o600);
+      // A build leaves no file behind, so the password is handed over through the
+      // KV namespace, not the build log. It is stored before it is set, and one
+      // that is already waiting there is reused, so a retry or an overlapping
+      // build never ends with a different password than the one published.
+      const kvValues = `/accounts/${account}/storage/kv/namespaces/${kv.id}/values/first-login`;
+      const waiting = workersBuild ? await kvText(kvValues) : "";
+      const password = waiting || randomBytes(18).toString("base64url");
+      if (workersBuild) {
+        if (!waiting) await kvText(kvValues, password);
+      } else {
+        // Saved locally first, so a failed upload or a crash can never lose it.
+        const file = join(root, ".setup-secrets");
+        writeFileSync(file, `ADMIN_PASSWORD=${password}\n`, { mode: 0o600 });
+        chmodSync(file, 0o600);
+      }
       await wrangler(["secret", "bulk", ...cwd], {
         input: JSON.stringify({ AUTH_MODE: "password", ADMIN_PASSWORD: password }),
       });
       say("✔ Set AUTH_MODE and a generated ADMIN_PASSWORD");
-      // A build leaves no file behind, so the password is handed over through the
-      // KV namespace, not the build log. Read it there once and delete the key.
-      if (workersBuild) {
-        await api("PUT", `/accounts/${account}/storage/kv/namespaces/${kv.id}/values/first-login`, { ADMIN_PASSWORD: password });
-        say(`→ Login password: open KV "${KV_TITLE}", key "first-login", save the password, then delete the key.`);
-      } else say("→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
+      say(workersBuild
+        ? `→ Login password: open KV "${KV_TITLE}", key "first-login", save the password, then delete the key.`
+        : "→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
     } else if (!existing.includes("AUTH_MODE")) {
       // The password exists but AUTH_MODE was removed (a switch to Access and back).
       await wrangler(["secret", "bulk", ...cwd], { input: JSON.stringify({ AUTH_MODE: "password" }) });
@@ -358,6 +397,7 @@ async function main() {
     // Switching to Access: an earlier password setting would still take priority.
     await wrangler(["secret", "delete", "AUTH_MODE", ...cwd], { input: "y\n" });
     say("✔ Removed the old AUTH_MODE secret so Cloudflare Access is used");
+  }
   }
 
   if (workersBuild) return;
