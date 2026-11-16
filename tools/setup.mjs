@@ -25,9 +25,8 @@ const check = process.argv.includes("--check");
 // --workers-build runs inside a Cloudflare Workers Builds build (via the
 // postinstall script). It creates what is missing, fills in the placeholders in
 // the build checkout and applies migrations; the build's own deploy command
-// then deploys. Anywhere else it does nothing.
+// then deploys. The postinstall script only starts it inside Workers Builds.
 const workersBuild = process.argv.includes("--workers-build");
-if (workersBuild && process.env.WORKERS_CI !== "1") process.exit(0);
 const WORKER = "workoholic";
 const BUCKET = "workoholic-evidence";
 const KEY_NAME = "WORKOHOLIC_CONFIG_KEY";
@@ -344,11 +343,12 @@ async function main() {
         input: JSON.stringify({ AUTH_MODE: "password", ADMIN_PASSWORD: password }),
       });
       say("✔ Set AUTH_MODE and a generated ADMIN_PASSWORD");
-      // A build leaves no file behind, so the password is shown once, in the
-      // build log that only the account owner can read.
-      say(workersBuild
-        ? `→ Login password (shown once, save it in your password manager): ${password}`
-        : "→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
+      // A build leaves no file behind, so the password is handed over through the
+      // KV namespace, not the build log. Read it there once and delete the key.
+      if (workersBuild) {
+        await api("PUT", `/accounts/${account}/storage/kv/namespaces/${kv.id}/values/first-login`, { ADMIN_PASSWORD: password });
+        say(`→ Login password: open KV "${KV_TITLE}", key "first-login", save the password, then delete the key.`);
+      } else say("→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
     } else if (!existing.includes("AUTH_MODE")) {
       // The password exists but AUTH_MODE was removed (a switch to Access and back).
       await wrangler(["secret", "bulk", ...cwd], { input: JSON.stringify({ AUTH_MODE: "password" }) });
