@@ -90,6 +90,30 @@ describe("dashboard-managed runtime configuration", () => {
     expect(state.storedRow()).toBeNull();
   });
 
+  it.each(["false", 0, null])("rejects a non-boolean auto-submit value %s", async (value) => {
+    const state = fakeDb();
+    await expect(
+      saveRuntimeConfiguration(
+        env(state.db),
+        { studentConsultingAutoSubmit: value as unknown as boolean },
+        "operator@example.test",
+      ),
+    ).rejects.toThrow(/true eller false/);
+    expect(state.storedRow()).toBeNull();
+  });
+
+  it("rejects StudentConsulting credentials that are not text", async () => {
+    const state = fakeDb();
+    await expect(
+      saveRuntimeConfiguration(
+        env(state.db),
+        { studentConsulting: { email: "user@example.test", password: 123 as unknown as string } },
+        "operator@example.test",
+      ),
+    ).rejects.toThrow(/som text/);
+    expect(state.storedRow()).toBeNull();
+  });
+
   it("stores sensitive values encrypted and resolves them for automation", async () => {
     const state = fakeDb();
     const runtimeEnv = env(state.db);

@@ -175,6 +175,22 @@ export async function saveRuntimeConfiguration(
   delete (next as StoredRuntimeConfiguration & { turnstileSecret?: unknown }).turnstileSecret;
   delete (next as StoredRuntimeConfiguration & { notifyWebhookUrl?: unknown }).notifyWebhookUrl;
 
+  if (
+    update.studentConsulting !== undefined &&
+    (update.studentConsulting === null ||
+      Array.isArray(update.studentConsulting) ||
+      typeof update.studentConsulting !== "object" ||
+      typeof update.studentConsulting.email !== "string" ||
+      typeof update.studentConsulting.password !== "string")
+  ) {
+    throw new Error("StudentConsulting-uppgifter måste ha e-post och lösenord som text.");
+  }
+  if (
+    update.studentConsultingAutoSubmit !== undefined &&
+    typeof update.studentConsultingAutoSubmit !== "boolean"
+  ) {
+    throw new Error("Automatisk inskickning måste vara true eller false.");
+  }
   if (update.studentConsulting !== undefined) {
     const email = normalizeEmail(update.studentConsulting.email, "StudentConsulting e-post");
     const password = update.studentConsulting.password.trim();

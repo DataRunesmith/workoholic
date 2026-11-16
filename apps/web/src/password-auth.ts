@@ -1,12 +1,13 @@
 // Self-hosted alternative to Cloudflare Access: AUTH_MODE=password protects the
 // dashboard with ADMIN_PASSWORD and an HMAC-signed session cookie.
 import { renderLoginPage } from "./auth-ui";
-import { requireSameOriginMutation, requestBodyRejection } from "./request-security";
+import { publicOrigin, requireSameOriginMutation, requestBodyRejection } from "./request-security";
 import type { AccessIdentity } from "./access-auth";
 
 export interface PasswordAuthEnv {
   AUTH_MODE?: string;
   ADMIN_PASSWORD?: string;
+  PUBLIC_BASE_URL?: string;
   DB?: D1Database;
 }
 
@@ -102,8 +103,11 @@ export async function passwordIdentity(
     : null;
 }
 
-function cookieAttributes(request: Request, maxAge: number): string {
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+function cookieAttributes(request: Request, env: PasswordAuthEnv, maxAge: number): string {
+  const secure =
+    new URL(request.url).protocol === "https:" || publicOrigin(request, env.PUBLIC_BASE_URL).startsWith("https:")
+      ? "; Secure"
+      : "";
   return `Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`;
 }
 
@@ -155,7 +159,7 @@ export async function passwordAuthRoute(
     pathname === "/auth/logout" ||
     pathname === "/cdn-cgi/access/logout"
   ) {
-    const originFailure = requireSameOriginMutation(request);
+    const originFailure = requireSameOriginMutation(request, env.PUBLIC_BASE_URL);
     if (originFailure) return originFailure;
   }
   if (pathname === "/auth/login" && request.method === "GET") return renderLoginPage();
@@ -199,7 +203,7 @@ export async function passwordAuthRoute(
       status: 303,
       headers: {
         location: "/",
-        "set-cookie": `${SESSION_COOKIE}=${value}; ${cookieAttributes(request, SESSION_SECONDS)}`,
+        "set-cookie": `${SESSION_COOKIE}=${value}; ${cookieAttributes(request, env, SESSION_SECONDS)}`,
         "cache-control": "no-store",
       },
     });
@@ -209,7 +213,7 @@ export async function passwordAuthRoute(
       status: 303,
       headers: {
         location: "/auth/login",
-        "set-cookie": `${SESSION_COOKIE}=; ${cookieAttributes(request, 0)}`,
+        "set-cookie": `${SESSION_COOKIE}=; ${cookieAttributes(request, env, 0)}`,
         "cache-control": "no-store",
       },
     });

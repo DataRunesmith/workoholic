@@ -10,7 +10,7 @@
 // never printed; generated ones go to .setup-secrets (owner-only, git-ignored).
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { cpSync, lstatSync, readFileSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { cpSync, lstatSync, mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -300,9 +300,12 @@ async function main() {
   };
   // A fresh checkout has no ignored build/ directory yet, which the renderer
   // insists on, so a build renders into the temp directory instead.
-  const renderDir = workersBuild ? join(tmpdir(), "workoholic-render") : "build";
+  const renderDir = workersBuild ? mkdtempSync(join(tmpdir(), "workoholic-render-")) : "build";
   const render = await run("node", ["tools/render.mjs", "-", renderDir], { env: renderEnv });
-  if (render.status !== 0) fail(`render failed:\n${render.stderr}`);
+  if (render.status !== 0) {
+    if (workersBuild) rmSync(renderDir, { recursive: true, force: true });
+    fail(`render failed:\n${render.stderr}`);
+  }
   say(`✔ Rendered ${workersBuild ? "the checkout" : "build/"}`);
 
   // The settings are not secret. Cloud builds read them from KV, so no build
@@ -330,6 +333,7 @@ async function main() {
   let cwd = ["--cwd", "build"];
   if (workersBuild) {
     cpSync(renderDir, root, { recursive: true, filter: (path) => !lstatSync(path).isSymbolicLink() });
+    rmSync(renderDir, { recursive: true, force: true });
     if (workersDev) {
       const file = join(root, "wrangler.jsonc");
       const text = readFileSync(file, "utf8")

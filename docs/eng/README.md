@@ -20,7 +20,7 @@ A GitHub account is only needed for the last two. For the first two, download th
 ### Docker
 
 ```sh
-ADMIN_PASSWORD='at-least-8-characters' docker compose up -d
+ADMIN_PASSWORD='at-least-16-characters' docker compose up -d
 ```
 
 Choose a password of your own in place of the example. Open <http://localhost:8787>, sign in with the password and fill in the settings. All data, including a generated encryption key, is kept in the `data` volume, so back that volume up. The job site is visited with a Chrome that the container downloads the first time it is needed; `compose.yaml` adds the `SYS_ADMIN` capability so that Chrome can run in its own sandbox. Set `PUBLIC_URL` if the app is reached on another address. Instead of typing the values on the command line you can put them in a file named `.env` next to `compose.yaml`; git ignores it.
