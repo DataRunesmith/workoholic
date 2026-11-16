@@ -3,3 +3,16 @@ queue_rules:
     merge_method: squash
     merge_conditions:
       - check-success = test
+pull_request_rules:
+  - name: New rule
+    conditions:
+      - base = main
+    actions: {}
+  - name: Auto-merge approved PRs
+    conditions:
+      - base = main
+      - "#approved-reviews-by >= 2"
+      - check-success = ci/build
+    actions:
+      merge:
+        method: squash
