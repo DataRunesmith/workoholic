@@ -35,11 +35,11 @@ jobs:
         run: pnpm test
       - name: Mergify CI Upload
         if: (success() || failure()) && hashFiles('junit.xml') != ''
-        uses: mergifyio/gha-mergify-ci@v27
-        with:
-          report_path: junit.xml
-          job_name: test (node)
-          test_step_outcome: ${{ steps.tests.outcome }}
+        env:
+          MERGIFY_TEST_JOB_NAME: test (node)
+        run: |
+          python3 -m pip install --user mergify-cli==2026.11.8
+          "$HOME/.local/bin/mergify" ci junit-process junit.xml
       - run: pnpm typecheck
       - run: sh tools/deploy.sh cloudflare.example.env --dry-run
       - run: node tools/check-addresses.mjs
