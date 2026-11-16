@@ -15,6 +15,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -25,7 +28,18 @@ jobs:
       - run: npm install -g corepack
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - name: Run tests
+        id: tests
+        env:
+          MERGIFY_TEST_JOB_NAME: test (web)
+        run: pnpm test
+      - name: Mergify CI Upload
+        if: (success() || failure()) && hashFiles('junit.xml') != ''
+        uses: mergifyio/gha-mergify-ci@v27
+        with:
+          report_path: junit.xml
+          job_name: test (node)
+          test_step_outcome: ${{ steps.tests.outcome }}
       - run: pnpm typecheck
       - run: sh tools/deploy.sh cloudflare.example.env --dry-run
       - run: node tools/check-addresses.mjs
