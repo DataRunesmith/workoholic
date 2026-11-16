@@ -15,7 +15,10 @@ const SESSION_COOKIE = "jobb_session";
 const SESSION_SECONDS = 12 * 60 * 60;
 const MIN_PASSWORD_LENGTH = 16;
 const MAX_LOGIN_BODY_BYTES = 8 * 1024;
-const MAX_LOGIN_ATTEMPTS = 10;
+// Without a client IP (self-hosted) every client shares one bucket, so its limit
+// is higher: a handful of bad requests must not lock the admin out.
+const MAX_LOGIN_ATTEMPTS_PER_IP = 10;
+const MAX_LOGIN_ATTEMPTS_SHARED = 100;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const encoder = new TextEncoder();
 
@@ -25,10 +28,12 @@ export async function passwordLoginRateLimitReady(db: D1Database): Promise<boole
   try {
     const row = await db
       .prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dashboard_login_attempts'",
+        `SELECT COUNT(*) AS found FROM sqlite_master
+         WHERE type = 'table'
+           AND name IN ('dashboard_login_attempts', 'dashboard_revoked_sessions')`,
       )
-      .first<{ name: string }>();
-    return row?.name === "dashboard_login_attempts";
+      .first<{ found: number }>();
+    return Number(row?.found ?? 0) === 2;
   } catch {
     return false;
   }
@@ -42,19 +47,26 @@ export function passwordAuthConfigured(env: PasswordAuthEnv): boolean {
   return passwordModeRequested(env) && (env.ADMIN_PASSWORD ?? "").length >= MIN_PASSWORD_LENGTH;
 }
 
+function base64Url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+// The password is never the MAC key itself: a key is derived from it for this
+// one purpose, so the cookie MAC is not an oracle for the password.
 async function sessionMac(password: string, value: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
+  const base = await crypto.subtle.importKey(
     "raw",
     encoder.encode(password),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
   );
-  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
-  return btoa(String.fromCharCode(...mac))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  const derived = await crypto.subtle.sign("HMAC", base, encoder.encode("workoholic-session-v2"));
+  const key = await crypto.subtle.importKey("raw", derived, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return base64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value))));
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -76,31 +88,58 @@ function sessionCookie(request: Request): string {
   return found ?? "";
 }
 
+interface VerifiedSession {
+  id: string;
+  expiresAtSeconds: number;
+}
+
+/** The session in the request's cookie when its signature and expiry are valid. */
+async function verifiedSession(
+  request: Request,
+  env: PasswordAuthEnv,
+  now: number,
+): Promise<VerifiedSession | null> {
+  if (!passwordAuthConfigured(env)) return null;
+  const [expiry, id, mac, extra] = sessionCookie(request).split(".");
+  if (
+    extra !== undefined ||
+    !/^\d{10}$/.test(expiry ?? "") ||
+    !/^[A-Za-z0-9_-]{22}$/.test(id ?? "") ||
+    !/^[A-Za-z0-9_-]{43}$/.test(mac ?? "")
+  ) {
+    return null;
+  }
+  const expiresAtSeconds = Number(expiry);
+  if (
+    expiresAtSeconds * 1000 <= now ||
+    expiresAtSeconds * 1000 > now + SESSION_SECONDS * 1000
+  ) {
+    return null;
+  }
+  return timingSafeEqual(await sessionMac(env.ADMIN_PASSWORD!, `${expiry}.${id}`), mac!)
+    ? { id: id!, expiresAtSeconds }
+    : null;
+}
+
 export async function passwordIdentity(
   request: Request,
   env: PasswordAuthEnv,
   now = Date.now(),
 ): Promise<AccessIdentity | null> {
-  if (!passwordAuthConfigured(env)) return null;
-  const [expiry, mac, extra] = sessionCookie(request).split(".");
-  if (
-    extra !== undefined ||
-    !/^\d{10}$/.test(expiry ?? "") ||
-    !/^[A-Za-z0-9_-]{43}$/.test(mac ?? "")
-  ) {
+  const session = await verifiedSession(request, env, now);
+  if (!session) return null;
+  // A signed-out session stays rejected until it would have expired anyway.
+  // If the revocation list cannot be read, the session is not trusted.
+  try {
+    const revoked = await env.DB!.prepare(
+      "SELECT 1 AS revoked FROM dashboard_revoked_sessions WHERE session_id = ?",
+    )
+      .bind(session.id)
+      .first<{ revoked: number }>();
+    return revoked ? null : PASSWORD_IDENTITY;
+  } catch {
     return null;
   }
-  const expirySeconds = Number(expiry);
-  if (
-    !Number.isSafeInteger(expirySeconds) ||
-    expirySeconds * 1000 <= now ||
-    expirySeconds * 1000 > now + SESSION_SECONDS * 1000
-  ) {
-    return null;
-  }
-  return timingSafeEqual(await sessionMac(env.ADMIN_PASSWORD!, expiry), mac)
-    ? PASSWORD_IDENTITY
-    : null;
 }
 
 function cookieAttributes(request: Request, env: PasswordAuthEnv, maxAge: number): string {
@@ -112,18 +151,13 @@ function cookieAttributes(request: Request, env: PasswordAuthEnv, maxAge: number
 }
 
 
-async function loginAttemptKey(request: Request): Promise<string> {
-  const ip = request.headers.get("CF-Connecting-IP")?.trim() || "unknown";
-  const digest = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", encoder.encode(`workoholic-password-login:${ip}`)),
-  );
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
+const bucketKey = async (name: string): Promise<string> =>
+  Array.from(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(`workoholic-password-login:${name}`))),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
 
-async function reserveLoginAttempt(request: Request, env: PasswordAuthEnv): Promise<string | null> {
-  const db = env.DB;
-  if (!db) throw new Error("Password login rate-limit storage is unavailable");
-  const key = await loginAttemptKey(request);
+async function countAttempt(db: D1Database, key: string, limit: number): Promise<boolean> {
   const now = Date.now();
   const row = await db.prepare(
     `INSERT INTO dashboard_login_attempts (bucket_key, attempts, window_started_at)
@@ -141,11 +175,27 @@ async function reserveLoginAttempt(request: Request, env: PasswordAuthEnv): Prom
   )
     .bind(key, now, now - LOGIN_WINDOW_MS, now - LOGIN_WINDOW_MS)
     .first<{ attempts: number }>();
+  return Number(row?.attempts ?? limit + 1) <= limit;
+}
+
+/**
+ * Every attempt counts against a global bucket, so a forged client-IP header
+ * cannot buy unlimited tries; with an IP it also counts against that IP's own
+ * bucket. Returns the key to clear after a successful login, or null if blocked.
+ */
+async function reserveLoginAttempt(request: Request, env: PasswordAuthEnv): Promise<string | null> {
+  const db = env.DB;
+  if (!db) throw new Error("Password login rate-limit storage is unavailable");
+  const ip = request.headers.get("CF-Connecting-IP")?.trim() ?? "";
+  const shared = await bucketKey("unknown");
+  const sharedOk = await countAttempt(db, shared, MAX_LOGIN_ATTEMPTS_SHARED);
+  const ipKey = ip ? await bucketKey(ip) : shared;
+  const ipOk = ip ? await countAttempt(db, ipKey, MAX_LOGIN_ATTEMPTS_PER_IP) : true;
   await db.prepare("DELETE FROM dashboard_login_attempts WHERE window_started_at < ?")
-    .bind(now - 24 * 60 * 60 * 1000)
+    .bind(Date.now() - 24 * 60 * 60 * 1000)
     .run()
     .catch(() => undefined);
-  return Number(row?.attempts ?? MAX_LOGIN_ATTEMPTS + 1) <= MAX_LOGIN_ATTEMPTS ? key : null;
+  return sharedOk && ipOk ? ipKey : null;
 }
 
 /** Login and logout routes for password mode; null for every other request. */
@@ -198,7 +248,8 @@ export async function passwordAuthRoute(
     }
 
     const expiry = String(Math.floor(Date.now() / 1000) + SESSION_SECONDS);
-    const value = `${expiry}.${await sessionMac(env.ADMIN_PASSWORD!, expiry)}`;
+    const id = base64Url(crypto.getRandomValues(new Uint8Array(16)));
+    const value = `${expiry}.${id}.${await sessionMac(env.ADMIN_PASSWORD!, `${expiry}.${id}`)}`;
     return new Response(null, {
       status: 303,
       headers: {
@@ -209,6 +260,31 @@ export async function passwordAuthRoute(
     });
   }
   if (request.method === "POST" && (pathname === "/auth/logout" || pathname === "/cdn-cgi/access/logout")) {
+    const session = await verifiedSession(request, env, Date.now());
+    let revoked = true;
+    if (session) {
+      try {
+        if (!env.DB) throw new Error("no database");
+        await env.DB.prepare(
+          "INSERT OR IGNORE INTO dashboard_revoked_sessions (session_id, expires_at) VALUES (?, ?)",
+        )
+          .bind(session.id, session.expiresAtSeconds)
+          .run();
+        await env.DB.prepare("DELETE FROM dashboard_revoked_sessions WHERE expires_at < ?")
+          .bind(Math.floor(Date.now() / 1000))
+          .run()
+          .catch(() => undefined);
+      } catch (error) {
+        revoked = false;
+        console.error("Could not record the signed-out session", error);
+      }
+    }
+    if (!revoked) {
+      return new Response("Utloggningen kunde inte slutföras. Försök igen.", {
+        status: 503,
+        headers: { "content-type": "text/plain; charset=utf-8", "set-cookie": `${SESSION_COOKIE}=; ${cookieAttributes(request, env, 0)}` },
+      });
+    }
     return new Response(null, {
       status: 303,
       headers: {

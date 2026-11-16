@@ -79,9 +79,10 @@ async function api(method, path, body) {
 }
 
 // Reads (no value) or writes (value) a plain-text KV entry; "" when it is absent.
-async function kvText(path, value) {
+async function kvText(path, value, ttlSeconds) {
   if (!/^\/accounts\/[0-9a-f]{32}\/storage\/kv\/namespaces\/[0-9a-f]{32}\/values\/[a-z-]+$/.test(path)) throw new Error("unexpected KV path");
-  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+  const query = value !== undefined && ttlSeconds ? `?expiration_ttl=${Number(ttlSeconds)}` : "";
+  const response = await fetch(`https://api.cloudflare.com/client/v4${path}${query}`, {
     method: value === undefined ? "GET" : "PUT",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "text/plain" },
     body: value,
@@ -378,7 +379,8 @@ async function main() {
       const waiting = workersBuild ? await kvText(kvValues) : "";
       const password = waiting || randomBytes(18).toString("base64url");
       if (workersBuild) {
-        if (!waiting) await kvText(kvValues, password);
+        // The key expires by itself, so the password does not stay in KV for good.
+        if (!waiting) await kvText(kvValues, password, 7 * 24 * 60 * 60);
       } else {
         // Saved locally first, so a failed upload or a crash can never lose it.
         const file = join(root, ".setup-secrets");
@@ -390,7 +392,7 @@ async function main() {
       });
       say("✔ Set AUTH_MODE and a generated ADMIN_PASSWORD");
       say(workersBuild
-        ? `→ Login password: open KV "${KV_TITLE}", key "first-login", save the password, then delete the key.`
+        ? `→ Login password: open KV "${KV_TITLE}", key "first-login", save the password. The key expires after 7 days.`
         : "→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
     } else if (!existing.includes("AUTH_MODE")) {
       // The password exists but AUTH_MODE was removed (a switch to Access and back).

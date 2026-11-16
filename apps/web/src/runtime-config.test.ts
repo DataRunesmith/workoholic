@@ -32,6 +32,18 @@ function fakeDb(options: { missingTable?: boolean } = {}) {
           return row;
         },
         async run() {
+          if (sql.includes("SET ciphertext = ?, iv = ?, schema_version")) {
+            if (row && row.ciphertext === values[5]) {
+              row = {
+                ...row,
+                ciphertext: String(values[0]),
+                iv: String(values[1]),
+                updated_by: String(values[3]),
+              };
+              return { success: true, meta: { changes: 1 } };
+            }
+            return { success: true, meta: { changes: 0 } };
+          }
           if (sql.includes("UPDATE runtime_configuration")) {
             reencryptions += 1;
             if (row && row.ciphertext === values[3]) {
@@ -40,16 +52,17 @@ function fakeDb(options: { missingTable?: boolean } = {}) {
             }
             return { success: true, meta: { changes: 0 } };
           }
-          if (!sql.includes("INSERT INTO runtime_configuration")) {
+          if (!sql.includes("INTO runtime_configuration")) {
             throw new Error("Unexpected SQL");
           }
+          if (row) return { success: true, meta: { changes: 0 } };
           row = {
             ciphertext: String(values[1]),
             iv: String(values[2]),
             updated_at: "2026-09-30 22:00:00",
             updated_by: String(values[4]),
           };
-          return { success: true };
+          return { success: true, meta: { changes: 1 } };
         },
       };
       return statement;
@@ -88,6 +101,37 @@ describe("dashboard-managed runtime configuration", () => {
       ),
     ).rejects.toThrow(/at least 32 UTF-8 bytes/);
     expect(state.storedRow()).toBeNull();
+  });
+
+  it("refuses a save when the stored configuration changed meanwhile", async () => {
+    const state = fakeDb();
+    await saveRuntimeConfiguration(env(state.db), { studentConsultingAutoSubmit: false }, "a@example.test");
+    let raced = false;
+    const racing = {
+      prepare(sql: string) {
+        const statement = state.db.prepare(sql);
+        if (!sql.includes("SET ciphertext = ?, iv = ?, schema_version")) return statement;
+        // Someone else saves between this save's read and its write.
+        return {
+          bind: (...args: unknown[]) => ({
+            run: async () => {
+              if (!raced) {
+                raced = true;
+                await saveRuntimeConfiguration(
+                  env(state.db),
+                  { studentConsultingAutoSubmit: false, jobIncludeTerms: "other" },
+                  "c@example.test",
+                );
+              }
+              return statement.bind(...args).run();
+            },
+          }),
+        };
+      },
+    } as unknown as D1Database;
+    await expect(
+      saveRuntimeConfiguration(env(racing), { studentConsultingAutoSubmit: false, jobIncludeTerms: "mine" }, "b@example.test"),
+    ).rejects.toThrow(/ändrades samtidigt/);
   });
 
   it.each(["false", 0, null])("rejects a non-boolean auto-submit value %s", async (value) => {
