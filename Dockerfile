@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/app
 COPY . .
-RUN corepack enable && pnpm install --frozen-lockfile
+RUN npm install -g corepack && corepack enable && pnpm install --frozen-lockfile
 RUN mkdir -p /data && chown node:node /data /srv
 USER node
 VOLUME /data
