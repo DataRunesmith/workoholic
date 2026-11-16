@@ -10,7 +10,8 @@
 // never printed; generated ones go to .setup-secrets (owner-only, git-ignored).
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { writeFileSync, chmodSync, rmSync } from "node:fs";
+import { cpSync, lstatSync, readFileSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +22,12 @@ if (process.platform === "win32") {
   process.exit(1);
 }
 const check = process.argv.includes("--check");
+// --workers-build runs inside a Cloudflare Workers Builds build (via the
+// postinstall script). It creates what is missing, fills in the placeholders in
+// the build checkout and applies migrations; the build's own deploy command
+// then deploys. Anywhere else it does nothing.
+const workersBuild = process.argv.includes("--workers-build");
+if (workersBuild && process.env.WORKERS_CI !== "1") process.exit(0);
 const WORKER = "workoholic";
 const BUCKET = "workoholic-evidence";
 const KEY_NAME = "WORKOHOLIC_CONFIG_KEY";
@@ -32,14 +39,15 @@ const get = (name, fallback = "") => (process.env[name] ?? "").trim() || fallbac
 
 const token = get("CLOUDFLARE_API_TOKEN");
 if (!token) fail("CLOUDFLARE_API_TOKEN is missing. Put it in setup.env (see setup.example.env).");
-const auth = get("AUTH", "password");
+const auth = get("AUTH", workersBuild && get("CF_ACCESS_TEAM_DOMAIN") && get("CF_ACCESS_AUD") ? "access" : "password");
 if (!["password", "access"].includes(auth)) fail("AUTH must be 'password' or 'access'.");
-const host = get("PUBLIC_HOST");
-if (!host) fail("PUBLIC_HOST is missing. Set the hostname the app will be served on (a domain in your Cloudflare account).");
+let host = get("PUBLIC_HOST");
+// A build without PUBLIC_HOST serves the Worker on its workers.dev address.
+if (!host && !workersBuild) fail("PUBLIC_HOST is missing. Set the hostname the app will be served on (a domain in your Cloudflare account).");
 // Values end up in request headers, URL paths and the rendered config, so only
 // accept the shapes Cloudflare actually uses.
 if (!/^[A-Za-z0-9_-]{20,}$/.test(token)) fail("CLOUDFLARE_API_TOKEN looks malformed (letters, digits, _ and - only).");
-if (!/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(host)) fail("PUBLIC_HOST must be a plain hostname such as app.example.com.");
+if (host && !/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(host)) fail("PUBLIC_HOST must be a plain hostname such as app.example.com.");
 if (get("CLOUDFLARE_ACCOUNT_ID") && !/^[0-9a-f]{32}$/.test(get("CLOUDFLARE_ACCOUNT_ID"))) fail("CLOUDFLARE_ACCOUNT_ID must be 32 hex characters.");
 if (!/^[a-z0-9][a-z0-9_-]{0,62}$/i.test(get("D1_DATABASE_NAME", "workoholic"))) fail("D1_DATABASE_NAME may only contain letters, digits, _ and -.");
 if (auth === "access" && (!get("CF_ACCESS_TEAM_DOMAIN") || !get("CF_ACCESS_AUD"))) {
@@ -158,7 +166,7 @@ function takeLock() {
 }
 
 async function main() {
-  if (!check) takeLock();
+  if (!check && !workersBuild) takeLock();
   // 1. Token and account
   const accounts = await api("GET", "/accounts");
   if (accounts.length !== 1 && !get("CLOUDFLARE_ACCOUNT_ID")) {
@@ -252,6 +260,13 @@ async function main() {
   } else say(`✔ ${KEY_NAME} exists (left untouched)`);
 
   // 3. Render
+  let workersDev = false;
+  if (!host) {
+    const { subdomain } = await api("GET", `/accounts/${account}/workers/subdomain`).catch(() => ({}));
+    if (!subdomain) fail("PUBLIC_HOST is not set and the account has no workers.dev subdomain. Set PUBLIC_HOST as a build variable, or enable workers.dev under Workers & Pages.");
+    host = `${WORKER}.${subdomain}.workers.dev`;
+    workersDev = true;
+  }
   // The renderer only needs the settings, not the token or anything else.
   const renderEnv = {
     PATH: process.env.PATH,
@@ -266,9 +281,12 @@ async function main() {
     THEME_KEY_PREFIX: get("THEME_KEY_PREFIX", "workoholic"),
     THEME_COOKIE_DOMAIN: get("THEME_COOKIE_DOMAIN", ""),
   };
-  const render = await run("node", ["tools/render.mjs", "-", "build"], { env: renderEnv });
+  // A fresh checkout has no ignored build/ directory yet, which the renderer
+  // insists on, so a build renders into the temp directory instead.
+  const renderDir = workersBuild ? join(tmpdir(), "workoholic-render") : "build";
+  const render = await run("node", ["tools/render.mjs", "-", renderDir], { env: renderEnv });
   if (render.status !== 0) fail(`render failed:\n${render.stderr}`);
-  say("✔ Rendered build/");
+  say(`✔ Rendered ${workersBuild ? "the checkout" : "build/"}`);
 
   // The settings are not secret. Cloud builds read them from KV, so no build
   // variables have to be typed in.
@@ -290,14 +308,31 @@ async function main() {
   await api("PUT", `/accounts/${account}/storage/kv/namespaces/${kv.id}/values/settings`, buildVariables);
   say(`✔ Stored the render settings in KV ("${KV_TITLE}", key "settings")`);
 
+  // In a Workers Builds build the rendered copy replaces the checkout, which is
+  // thrown away afterwards, so the build's own `wrangler deploy` uses it.
+  let cwd = ["--cwd", "build"];
+  if (workersBuild) {
+    cpSync(renderDir, root, { recursive: true, filter: (path) => !lstatSync(path).isSymbolicLink() });
+    if (workersDev) {
+      const file = join(root, "wrangler.jsonc");
+      const text = readFileSync(file, "utf8")
+        .replace(/\{\s*"pattern":\s*"[^"]*",\s*"custom_domain":\s*true\s*\},?\s*/, "")
+        .replace('"workers_dev": false', '"workers_dev": true');
+      writeFileSync(file, text);
+    }
+    cwd = [];
+  }
+
   // 4. Database, then the Worker
-  await wrangler(["d1", "migrations", "apply", "DB", "--remote", "--cwd", "build"]);
+  await wrangler(["d1", "migrations", "apply", "DB", "--remote", ...cwd]);
   say("✔ Migrations applied");
-  await wrangler(["deploy", "--cwd", "build"]);
-  say(`✔ Deployed "${WORKER}"`);
+  if (!workersBuild) {
+    await wrangler(["deploy", ...cwd]);
+    say(`✔ Deployed "${WORKER}"`);
+  }
 
   // 5. Login secrets (only the first time; deploys never delete secrets)
-  const existing = JSON.parse((await wrangler(["secret", "list", "--format", "json", "--cwd", "build"])) || "[]").map((s) => s.name);
+  const existing = JSON.parse((await wrangler(["secret", "list", "--format", "json", ...cwd])) || "[]").map((s) => s.name);
   if (auth === "password") {
     if (!existing.includes("ADMIN_PASSWORD")) {
       const password = randomBytes(18).toString("base64url");
@@ -305,21 +340,27 @@ async function main() {
       const file = join(root, ".setup-secrets");
       writeFileSync(file, `ADMIN_PASSWORD=${password}\n`, { mode: 0o600 });
       chmodSync(file, 0o600);
-      await wrangler(["secret", "bulk", "--cwd", "build"], {
+      await wrangler(["secret", "bulk", ...cwd], {
         input: JSON.stringify({ AUTH_MODE: "password", ADMIN_PASSWORD: password }),
       });
       say("✔ Set AUTH_MODE and a generated ADMIN_PASSWORD");
-      say("→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
+      // A build leaves no file behind, so the password is shown once, in the
+      // build log that only the account owner can read.
+      say(workersBuild
+        ? `→ Login password (shown once, save it in your password manager): ${password}`
+        : "→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
     } else if (!existing.includes("AUTH_MODE")) {
       // The password exists but AUTH_MODE was removed (a switch to Access and back).
-      await wrangler(["secret", "bulk", "--cwd", "build"], { input: JSON.stringify({ AUTH_MODE: "password" }) });
+      await wrangler(["secret", "bulk", ...cwd], { input: JSON.stringify({ AUTH_MODE: "password" }) });
       say("✔ ADMIN_PASSWORD exists (left untouched); set AUTH_MODE=password again");
     } else say("✔ ADMIN_PASSWORD and AUTH_MODE exist (left untouched)");
   } else if (existing.includes("AUTH_MODE")) {
     // Switching to Access: an earlier password setting would still take priority.
-    await wrangler(["secret", "delete", "AUTH_MODE", "--cwd", "build"], { input: "y\n" });
+    await wrangler(["secret", "delete", "AUTH_MODE", ...cwd], { input: "y\n" });
     say("✔ Removed the old AUTH_MODE secret so Cloudflare Access is used");
   }
+
+  if (workersBuild) return;
 
   // 6. Workers Builds: set the build and deploy commands
   const buildsNote = await configureWorkersBuilds(account);
