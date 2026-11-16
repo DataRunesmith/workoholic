@@ -52,7 +52,7 @@ Before pushing:
 - Address all known actionable defects and review findings. Do not dismiss findings merely because they are inconvenient, difficult to reproduce, or outside the immediate scope of the change.
 - Verify that tests actually exercise the changed behavior and that passing checks are not being mistaken for proof that the implementation is defect-free.
 - Inspect the final diff once more after all fixes and checks.
-- Run `/security-review` on the full diff before every push and fix every finding. Look in particular for secrets or passwords written to logs and for conditions controlled by environment input.
+- Run `/security-review` and `/code-review` on the full diff before every commit and fix every finding. Look in particular for secrets or passwords written to logs and for conditions controlled by environment input.
 
 Do not push incomplete, inadequately reviewed, knowingly defective, or questionable code simply to make progress or obtain feedback from CI or reviewers. CI, CodeRabbit, CodeQL, and human review are additional safeguards, not substitutes for doing the engineering work before pushing.
 
