@@ -35,6 +35,7 @@ jobs:
         run: pnpm test
       - name: Mergify CI Upload
         if: (success() || failure()) && hashFiles('junit.xml') != ''
+        continue-on-error: true
         env:
           MERGIFY_TEST_JOB_NAME: test (node)
         run: |

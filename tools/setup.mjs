@@ -10,7 +10,7 @@
 // never printed; generated ones go to .setup-secrets (owner-only, git-ignored).
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { cpSync, lstatSync, mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { cpSync, lstatSync, readFileSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,10 +79,9 @@ async function api(method, path, body) {
 }
 
 // Reads (no value) or writes (value) a plain-text KV entry; "" when it is absent.
-async function kvText(path, value, ttlSeconds) {
+async function kvText(path, value) {
   if (!/^\/accounts\/[0-9a-f]{32}\/storage\/kv\/namespaces\/[0-9a-f]{32}\/values\/[a-z-]+$/.test(path)) throw new Error("unexpected KV path");
-  const query = value !== undefined && ttlSeconds ? `?expiration_ttl=${Number(ttlSeconds)}` : "";
-  const response = await fetch(`https://api.cloudflare.com/client/v4${path}${query}`, {
+  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
     method: value === undefined ? "GET" : "PUT",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "text/plain" },
     body: value,
@@ -301,12 +300,9 @@ async function main() {
   };
   // A fresh checkout has no ignored build/ directory yet, which the renderer
   // insists on, so a build renders into the temp directory instead.
-  const renderDir = workersBuild ? mkdtempSync(join(tmpdir(), "workoholic-render-")) : "build";
+  const renderDir = workersBuild ? join(tmpdir(), "workoholic-render") : "build";
   const render = await run("node", ["tools/render.mjs", "-", renderDir], { env: renderEnv });
-  if (render.status !== 0) {
-    if (workersBuild) rmSync(renderDir, { recursive: true, force: true });
-    fail(`render failed:\n${render.stderr}`);
-  }
+  if (render.status !== 0) fail(`render failed:\n${render.stderr}`);
   say(`✔ Rendered ${workersBuild ? "the checkout" : "build/"}`);
 
   // The settings are not secret. Cloud builds read them from KV, so no build
@@ -334,7 +330,6 @@ async function main() {
   let cwd = ["--cwd", "build"];
   if (workersBuild) {
     cpSync(renderDir, root, { recursive: true, filter: (path) => !lstatSync(path).isSymbolicLink() });
-    rmSync(renderDir, { recursive: true, force: true });
     if (workersDev) {
       const file = join(root, "wrangler.jsonc");
       const text = readFileSync(file, "utf8")
@@ -379,8 +374,7 @@ async function main() {
       const waiting = workersBuild ? await kvText(kvValues) : "";
       const password = waiting || randomBytes(18).toString("base64url");
       if (workersBuild) {
-        // The key expires by itself, so the password does not stay in KV for good.
-        if (!waiting) await kvText(kvValues, password, 7 * 24 * 60 * 60);
+        if (!waiting) await kvText(kvValues, password);
       } else {
         // Saved locally first, so a failed upload or a crash can never lose it.
         const file = join(root, ".setup-secrets");
@@ -392,7 +386,7 @@ async function main() {
       });
       say("✔ Set AUTH_MODE and a generated ADMIN_PASSWORD");
       say(workersBuild
-        ? `→ Login password: open KV "${KV_TITLE}", key "first-login", save the password. The key expires after 7 days.`
+        ? `→ Login password: open KV "${KV_TITLE}", key "first-login", save the password, then delete the key.`
         : "→ The password is in .setup-secrets. Save it in your password manager, then delete the file.");
     } else if (!existing.includes("AUTH_MODE")) {
       // The password exists but AUTH_MODE was removed (a switch to Access and back).
