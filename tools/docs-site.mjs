@@ -28,7 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { posix } from "node:path";
+import { posix, resolve } from "node:path";
 
 // --csp-hashes: print the CSP sources ('sha256-...') that allow the inline
 // scripts in the built HTML under <dir>, for a Content-Security-Policy that
@@ -54,8 +54,13 @@ if (process.argv[2] === "--csp-hashes") {
 }
 
 const wiki = process.argv[2] === "--wiki";
-const out = wiki ? process.argv[3] : "site-docs";
-if (!out) throw new Error("usage: node tools/docs-site.mjs [--wiki <dir>]");
+const outArg = wiki ? process.argv[3] : "site-docs";
+if (!outArg) throw new Error("usage: node tools/docs-site.mjs [--wiki <dir>]");
+const root = resolve(process.cwd());
+const out = resolve(root, outArg);
+if (out !== root && !out.startsWith(`${root}/`)) {
+  throw new Error("output directory must be within the current working directory");
+}
 const config = readFileSync("zensical.toml", "utf8");
 const repoUrl = config.match(/^repo_url\s*=\s*"([^"]+)"/m)?.[1];
 if (!repoUrl) throw new Error("repo_url is missing in zensical.toml");
