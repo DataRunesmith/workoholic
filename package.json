@@ -6,7 +6,7 @@
   "packageManager": "pnpm@12.20.0",
   "scripts": {
     "typecheck": "pnpm -r typecheck",
-    "test": "node --test test/*.test.mjs && pnpm -r test",
+    "test": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=junit.xml test/*.test.mjs && pnpm -r test",
     "dev": "pnpm --filter @workoholic/web dev",
     "setup:cloudflare": "node --env-file-if-exists=setup.env tools/setup.mjs",
     "secrets:push": "node --env-file-if-exists=setup.env tools/secrets.mjs"
