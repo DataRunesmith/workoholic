@@ -3,3 +3,5 @@ queue_rules:
     merge_method: squash
     merge_conditions:
       - check-success = test
+merge_protections_settings:
+  auto_merge_conditions: true
