@@ -20,7 +20,7 @@ Ett GitHub-konto behövs bara för de två sista. För de två första räcker d
 ### Docker
 
 ```sh
-ADMIN_PASSWORD='minst-8-tecken' docker compose up -d
+ADMIN_PASSWORD='minst-16-tecken' docker compose up -d
 ```
 
 Välj ett eget lösenord i stället för exemplet. Öppna <http://localhost:8787>, logga in med lösenordet och fyll i inställningarna. All data, även en genererad krypteringsnyckel, sparas i volymen `data`, så säkerhetskopiera den volymen. Jobbsajten besöks med en Chrome som containern laddar ned första gången den behövs; `compose.yaml` lägger till behörigheten `SYS_ADMIN` så att Chrome kan köra i sin egen sandlåda. Sätt `PUBLIC_URL` om appen nås på en annan adress. I stället för att skriva värdena på kommandoraden kan du lägga dem i en fil med namnet `.env` bredvid `compose.yaml`; git ignorerar den.
@@ -102,6 +102,7 @@ Samma sak går att göra för hand under Settings → Secrets and variables → 
 Skapa en Worker med namnet `workoholic` från ditt repo i Cloudflares kontrollpanel (Workers & Pages → Create → Import a repository) och ange:
 
 - Deploy command: `sh tools/deploy.sh`
+- Eller ändra ingenting: med standardkommandot `npx wrangler deploy` och bygget API-token (den behöver D1: Edit, Workers Scripts: Edit, Workers KV Storage: Edit, Workers R2 Storage: Edit och Secrets Store: Edit) skapar bygget själv D1-databasen, nyckeln i Secrets Store och KV-inställningarna, fyller i platshållarna och kör migreringarna (`postinstall` kör `tools/setup.mjs --workers-build`, bara i Workers Builds av `main`). Workern nås på sin workers.dev-adress med lösenordsinloggning; det genererade lösenordet ligger i KV-namnrymden `workoholic-config`, nyckeln `first-login` (spara det och radera nyckeln). Sätt build-variabeln `PUBLIC_HOST` för att använda din egen domän.
 - Build variables and secrets: varje namn i tabellen ovan med ditt värde
 - API token: den token du skapade ovan; den token som Cloudflare skapar själv kan varken köra D1-migreringar eller binda Secrets Store
 - Settings → Build → Branch control: stäng av Enable Preview Builds

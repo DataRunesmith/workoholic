@@ -393,3 +393,6 @@ statusline.sh
 *.env
 !*.example.env
 /build/
+
+# Test reports
+junit.xml

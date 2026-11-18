@@ -506,7 +506,7 @@ export async function reconcileInterruptedApplications(db: D1Database): Promise<
            ORDER BY candidate.attempt_no DESC
            LIMIT 1
          )
-       WHERE a.status = 'applying'
+       WHERE (a.status = 'applying' OR (a.status = 'queued' AND latest.id IS NULL))
          AND a.updated_at <= datetime('now', '-5 minutes')
          AND s.state = 'reserved'
        ORDER BY a.updated_at, a.id
@@ -556,7 +556,7 @@ export async function reconcileInterruptedApplications(db: D1Database): Promise<
           .prepare(
             `UPDATE applications
              SET status = 'failed', updated_at = CURRENT_TIMESTAMP
-             WHERE id = ? AND status = 'applying' AND applied_at IS NULL
+             WHERE id = ? AND status IN ('applying', 'queued') AND applied_at IS NULL
                AND updated_at <= datetime('now', '-5 minutes')
                AND EXISTS (
                  SELECT 1 FROM monthly_application_slots

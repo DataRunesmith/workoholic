@@ -20,7 +20,7 @@ A GitHub account is only needed for the last two. For the first two, download th
 ### Docker
 
 ```sh
-ADMIN_PASSWORD='at-least-8-characters' docker compose up -d
+ADMIN_PASSWORD='at-least-16-characters' docker compose up -d
 ```
 
 Choose a password of your own in place of the example. Open <http://localhost:8787>, sign in with the password and fill in the settings. All data, including a generated encryption key, is kept in the `data` volume, so back that volume up. The job site is visited with a Chrome that the container downloads the first time it is needed; `compose.yaml` adds the `SYS_ADMIN` capability so that Chrome can run in its own sandbox. Set `PUBLIC_URL` if the app is reached on another address. Instead of typing the values on the command line you can put them in a file named `.env` next to `compose.yaml`; git ignores it.
@@ -102,6 +102,7 @@ The same can be done by hand under Settings → Secrets and variables → Action
 In the Cloudflare dashboard, create a Worker named `workoholic` from your repository (Workers & Pages → Create → Import a repository) and set:
 
 - Deploy command: `sh tools/deploy.sh`
+- Or change nothing: with the default `npx wrangler deploy` and the build's API token (it needs D1: Edit, Workers Scripts: Edit, Workers KV Storage: Edit, Workers R2 Storage: Edit and Secrets Store: Edit), the build itself creates the D1 database, the Secrets Store key and the KV settings, fills in the placeholders and applies migrations (`postinstall` runs `tools/setup.mjs --workers-build`, only in Workers Builds of `main`). The Worker is served on its workers.dev address with password login; the generated password is in the KV namespace `workoholic-config`, key `first-login` (save it, then delete the key). Set the build variable `PUBLIC_HOST` to use your own domain instead.
 - Build variables and secrets: every name from the table above with your value
 - API token: the token you created above; the token Cloudflare creates by itself cannot apply D1 migrations or bind the Secrets Store
 - Settings → Build → Branch control: turn off Enable Preview Builds
