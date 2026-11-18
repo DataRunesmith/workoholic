@@ -56,6 +56,11 @@ if (process.argv[2] === "--csp-hashes") {
 const wiki = process.argv[2] === "--wiki";
 const out = wiki ? process.argv[3] : "site-docs";
 if (!out) throw new Error("usage: node tools/docs-site.mjs [--wiki <dir>]");
+const cwd = posix.resolve(process.cwd());
+const resolvedOut = posix.resolve(cwd, out);
+if (resolvedOut !== cwd && !resolvedOut.startsWith(`${cwd}/`)) {
+  throw new Error("output directory must be within the current working directory");
+}
 const config = readFileSync("zensical.toml", "utf8");
 const repoUrl = config.match(/^repo_url\s*=\s*"([^"]+)"/m)?.[1];
 if (!repoUrl) throw new Error("repo_url is missing in zensical.toml");
@@ -119,12 +124,12 @@ const rewrite = (src, dst, text) => {
     .join("\n");
 };
 
-rmSync(out, { recursive: true, force: true });
-mkdirSync(out, { recursive: true });
+rmSync(resolvedOut, { recursive: true, force: true });
+mkdirSync(resolvedOut, { recursive: true });
 let count = 0;
 for (const [src, dst] of pages) {
   if (wiki && !onWiki(dst)) continue;
-  const target = posix.join(out, wiki ? `${wikiName(dst)}.md` : dst);
+  const target = posix.join(resolvedOut, wiki ? `${wikiName(dst)}.md` : dst);
   mkdirSync(posix.dirname(target), { recursive: true });
   if (src.endsWith(".md")) writeFileSync(target, rewrite(src, dst, readFileSync(src, "utf8")));
   else cpSync(src, target);
@@ -138,12 +143,12 @@ if (wiki) {
       return `- [${page.startsWith("eng/") ? `English: ${title}` : title}](${wikiName(page)})`;
     });
   writeFileSync(
-    posix.join(out, "_Sidebar.md"),
+    posix.join(resolvedOut, "_Sidebar.md"),
     [...menu, `- [Källkod på GitHub](${repoUrl}#readme)`, ""].join("\n"),
   );
   writeFileSync(
-    posix.join(out, "_Footer.md"),
+    posix.join(resolvedOut, "_Footer.md"),
     `Wikin speglas automatiskt från [repot](${repoUrl}) (\`README.md\`, \`docker/README.md\` och \`docs/\`) vid varje merge till \`main\`. Ändra där; ändringar här skrivs över.\n`,
   );
 }
-console.log(`${out}/: ${count} pages`);
+console.log(`${resolvedOut}/: ${count} pages`);
