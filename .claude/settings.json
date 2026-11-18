@@ -8,6 +8,10 @@
       {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/review-before-commit.mjs\"" }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-before-push.mjs\"", "timeout": 600 }]
       }
     ]
   }

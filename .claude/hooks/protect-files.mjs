@@ -1,11 +1,13 @@
 // PreToolUse hook for file edits and Bash: AGENTS.md forbids changing workflows
-// (only Renovate and Dependabot may) and editing the lockfile by hand.
+// (only Renovate and Dependabot may), editing the lockfile by hand and changing
+// the hooks and agents in .claude/ that enforce those rules.
 // It fails closed: input it cannot parse is blocked.
 import { realpathSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 
 const WORKFLOWS = "workflows are not changed here (AGENTS.md: only Renovate and Dependabot may). Ask the owner first.";
 const LOCKFILE = "never edit the lockfile by hand. Use pnpm add/remove so pnpm updates it.";
+const CLAUDE_DIR = ".claude/ holds the hooks that enforce AGENTS.md and is not changed here. Ask the owner first.";
 
 const block = (why) => {
   console.error(`Blocked: ${why}`);
@@ -42,6 +44,7 @@ const reasonFor = (file) => {
     .toLowerCase();
   if (rel === ".github/workflows" || rel.startsWith(".github/workflows/")) return WORKFLOWS;
   if (rel === "pnpm-lock.yaml") return LOCKFILE;
+  if (rel === ".claude" || rel.startsWith(".claude/")) return CLAUDE_DIR;
   return "";
 };
 
@@ -54,6 +57,7 @@ if (data?.tool_name === "Bash") {
   if (writes.test(command)) {
     if (/\.github\/workflows\b/i.test(command)) block(WORKFLOWS);
     if (/(^|[\s/'"=])pnpm-lock\.yaml\b/i.test(command)) block(LOCKFILE);
+    if (/(^|[\s/'"=])\.claude(\/|\s|$|['"])/i.test(command)) block(CLAUDE_DIR);
   }
 } else {
   const file = input.file_path ?? input.path ?? input.notebook_path;
