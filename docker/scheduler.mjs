@@ -1,7 +1,14 @@
 // `wrangler dev` does not fire cron triggers by itself. This calls the
 // Worker's scheduled handler at 09:00 UTC every day, like the production cron
 // "0 9 10-13 * *"; the Worker itself only acts on the 10th–13th.
-const port = process.env.PORT || "8787";
+function getSafePort(value) {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return "8787";
+  const parsed = Number.parseInt(value, 10);
+  if (parsed < 1 || parsed > 65535) return "8787";
+  return String(parsed);
+}
+
+const port = getSafePort(process.env.PORT);
 const url = `http://127.0.0.1:${port}/cdn-cgi/handler/scheduled?cron=${encodeURIComponent("0 9 10-13 * *")}`;
 
 function msUntilNextRun(now = new Date()) {
