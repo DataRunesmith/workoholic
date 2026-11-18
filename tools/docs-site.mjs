@@ -54,8 +54,17 @@ if (process.argv[2] === "--csp-hashes") {
 }
 
 const wiki = process.argv[2] === "--wiki";
-const out = wiki ? process.argv[3] : "site-docs";
-if (!out) throw new Error("usage: node tools/docs-site.mjs [--wiki <dir>]");
+const outArg = wiki ? process.argv[3] : "site-docs";
+if (!outArg) throw new Error("usage: node tools/docs-site.mjs [--wiki <dir>]");
+const out = posix.normalize(outArg);
+if (
+  !out ||
+  out === "." ||
+  posix.isAbsolute(out) ||
+  out.split("/").includes("..")
+) {
+  throw new Error("invalid output directory: must be a relative path within the current working directory");
+}
 const config = readFileSync("zensical.toml", "utf8");
 const repoUrl = config.match(/^repo_url\s*=\s*"([^"]+)"/m)?.[1];
 if (!repoUrl) throw new Error("repo_url is missing in zensical.toml");
