@@ -25,15 +25,28 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { posix } from "node:path";
+import { posix, sep } from "node:path";
 
 // --csp-hashes: print the CSP sources ('sha256-...') that allow the inline
 // scripts in the built HTML under <dir>, for a Content-Security-Policy that
 // does not allow inline scripts in general.
 if (process.argv[2] === "--csp-hashes") {
+  const inputDir = process.argv[3];
+  if (!inputDir) throw new Error("usage: node tools/docs-site.mjs --csp-hashes <dir>");
+  const cwdRoot = posix.resolve(process.cwd());
+  const scanRoot = posix.resolve(cwdRoot, inputDir);
+  const rootPrefix = cwdRoot.endsWith(sep) ? cwdRoot : `${cwdRoot}${sep}`;
+  if (scanRoot !== cwdRoot && !scanRoot.startsWith(rootPrefix)) {
+    throw new Error("--csp-hashes directory must be inside the current working directory");
+  }
+  if (!existsSync(scanRoot) || !statSync(scanRoot).isDirectory()) {
+    throw new Error(`--csp-hashes directory does not exist or is not a directory: ${inputDir}`);
+  }
+
   const hashes = new Set();
   const scan = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -48,7 +61,7 @@ if (process.argv[2] === "--csp-hashes") {
       }
     }
   };
-  scan(process.argv[3]);
+  scan(scanRoot);
   console.log([...hashes].sort().join(" "));
   process.exit(0);
 }
