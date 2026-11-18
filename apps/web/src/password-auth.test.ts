@@ -5,6 +5,7 @@ import { passwordAuthRoute, passwordIdentity } from "./password-auth";
 function fakeDb(initialAttempts = 0, initialWindow = 0) {
   let attempts = initialAttempts;
   let windowStartedAt = initialWindow;
+  const revoked = new Set<string>();
   const db = {
     prepare(sql: string) {
       let values: unknown[] = [];
@@ -14,6 +15,9 @@ function fakeDb(initialAttempts = 0, initialWindow = 0) {
           return statement;
         },
         async first() {
+          if (sql.includes("FROM dashboard_revoked_sessions")) {
+            return revoked.has(String(values[0])) ? { revoked: 1 } : null;
+          }
           if (!sql.includes("RETURNING attempts")) return null;
           const now = Number(values[1]);
           const resetBefore = Number(values[2]);
@@ -26,6 +30,9 @@ function fakeDb(initialAttempts = 0, initialWindow = 0) {
           return { attempts };
         },
         async run() {
+          if (sql.includes("INSERT OR IGNORE INTO dashboard_revoked_sessions")) {
+            revoked.add(String(values[0]));
+          }
           if (sql.includes("DELETE FROM dashboard_login_attempts WHERE bucket_key")) {
             attempts = 0;
             windowStartedAt = 0;
@@ -36,7 +43,7 @@ function fakeDb(initialAttempts = 0, initialWindow = 0) {
       return statement;
     },
   } as unknown as D1Database;
-  return { db, attempts: () => attempts };
+  return { db, attempts: () => attempts, revoked };
 }
 
 const rateLimit = fakeDb();
@@ -100,13 +107,65 @@ describe("password mode", () => {
   it("blocks a request when the IP bucket is already over its limit", async () => {
     const blocked = fakeDb(10, Date.now());
     const response = await passwordAuthRoute(
-      at("/auth/login", { method: "POST", body: new URLSearchParams({ password: "wrong" }) }),
+      at("/auth/login", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.7" },
+        body: new URLSearchParams({ password: "wrong" }),
+      }),
       { ...env, DB: blocked.db },
     );
     expect(response?.status).toBe(429);
     expect(response?.headers.get("retry-after")).toBe("900");
     expect(await response?.text()).toContain("För många inloggningsförsök");
     expect(blocked.attempts()).toBe(11);
+  });
+
+  it("uses a larger shared bucket when no client IP is known", async () => {
+    const shared = fakeDb(10, Date.now());
+    const response = await passwordAuthRoute(
+      at("/auth/login", { method: "POST", body: new URLSearchParams({ password: "wrong" }) }),
+      { ...env, DB: shared.db },
+    );
+    expect(response?.status).toBe(401);
+    const full = fakeDb(100, Date.now());
+    const blocked = await passwordAuthRoute(
+      at("/auth/login", { method: "POST", body: new URLSearchParams({ password: "wrong" }) }),
+      { ...env, DB: full.db },
+    );
+    expect(blocked?.status).toBe(429);
+  });
+
+  it("rejects a session after logout and fails closed if revocations cannot be read", async () => {
+    const store = fakeDb();
+    const e = { ...env, DB: store.db };
+    const ok = await passwordAuthRoute(
+      at("/auth/login", { method: "POST", body: new URLSearchParams({ password: env.ADMIN_PASSWORD }) }),
+      e,
+    );
+    const cookie = ok!.headers.get("set-cookie")!.split(";")[0];
+    expect(cookie).toMatch(/=\d{10}\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/);
+    expect(await passwordIdentity(at("/", { headers: { cookie } }), e)).not.toBe(null);
+    const out = await passwordAuthRoute(at("/auth/logout", { method: "POST", headers: { cookie } }), e);
+    expect(out?.status).toBeLessThan(400);
+    expect(store.revoked.size).toBe(1);
+    expect(await passwordIdentity(at("/", { headers: { cookie } }), e)).toBe(null);
+    const again = await passwordAuthRoute(
+      at("/auth/login", { method: "POST", body: new URLSearchParams({ password: env.ADMIN_PASSWORD }) }),
+      e,
+    );
+    const cookie2 = again!.headers.get("set-cookie")!.split(";")[0];
+    const failing = {
+      prepare: (sql: string) =>
+        sql.includes("dashboard_revoked_sessions") ? { bind: () => ({ run: async () => { throw new Error("down"); } }) } : store.db.prepare(sql),
+    } as unknown as D1Database;
+    const failed = await passwordAuthRoute(
+      at("/auth/logout", { method: "POST", headers: { cookie: cookie2 } }),
+      { ...env, DB: failing },
+    );
+    expect(failed?.status).toBe(503);
+    expect(failed?.headers.get("set-cookie")).toBe(null);
+    const broken = { prepare: () => { throw new Error("down"); } } as unknown as D1Database;
+    expect(await passwordIdentity(at("/", { headers: { cookie } }), { ...env, DB: broken })).toBe(null);
   });
 
   it("answers 503 when the rate-limit storage is unavailable", async () => {

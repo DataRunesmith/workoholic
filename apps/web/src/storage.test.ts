@@ -4,6 +4,7 @@ import {
   deleteRunRecords,
   failOrphanedRunningRuns,
   markApplicationUncertain,
+  reconcileInterruptedApplications,
   isRetryablePreSubmitFailure,
   listRetryableFailedJobs,
   reclassifyApplicationNotSubmitted,
@@ -366,6 +367,53 @@ describe("definite not-applied reconciliation", () => {
       reclassifyApplicationNotSubmitted(fake.db, "application:studentconsulting:87570"),
     ).resolves.toBe(false);
     expect(fake.sql).toHaveLength(1);
+  });
+});
+
+describe("interrupted application recovery", () => {
+  function reconcileDb(stale: unknown[]) {
+    const sql: string[] = [];
+    let batches = 0;
+    const db = {
+      prepare(statement: string) {
+        sql.push(statement);
+        return {
+          bind() {
+            return this;
+          },
+          async all() {
+            return { results: stale };
+          },
+        };
+      },
+      async batch() {
+        batches += 1;
+        return [];
+      },
+    } as unknown as D1Database;
+    return { db, sql, batches: () => batches };
+  }
+
+  it("also selects queued applications that never started an attempt", async () => {
+    const fake = reconcileDb([]);
+    await reconcileInterruptedApplications(fake.db);
+    expect(fake.sql[0]).toContain("a.status = 'queued' AND latest.id IS NULL");
+  });
+
+  it("fails a stale queued application and frees its reserved slot", async () => {
+    const fake = reconcileDb([
+      {
+        application_id: "application:studentconsulting:1",
+        applied_at: null,
+        reservation_owner: "run-1",
+        attempt_id: null,
+        attempt_status: null,
+      },
+    ]);
+    await reconcileInterruptedApplications(fake.db);
+    expect(fake.batches()).toBe(1);
+    expect(fake.sql.some((statement) => statement.includes("status IN ('applying', 'queued')"))).toBe(true);
+    expect(fake.sql.some((statement) => statement.includes("state = 'free'"))).toBe(true);
   });
 });
 

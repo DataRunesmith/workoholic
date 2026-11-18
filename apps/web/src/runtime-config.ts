@@ -167,6 +167,12 @@ export async function saveRuntimeConfiguration(
 ): Promise<void> {
   // A partial dashboard update must never overwrite configuration that
   // cannot be decrypted (for example after an accidental key change).
+  // The ciphertext read here must still be stored when the update is written,
+  // so two overlapping saves cannot silently drop each other's fields.
+  const before = await env.DB.prepare("SELECT ciphertext FROM runtime_configuration WHERE id = ?")
+    .bind(CONFIG_ID)
+    .first<{ ciphertext: string }>()
+    .catch(() => null);
   const existing = await loadManagedRuntimeConfiguration(env);
   const next: StoredRuntimeConfiguration = {
     ...(existing ?? {}),
@@ -175,6 +181,22 @@ export async function saveRuntimeConfiguration(
   delete (next as StoredRuntimeConfiguration & { turnstileSecret?: unknown }).turnstileSecret;
   delete (next as StoredRuntimeConfiguration & { notifyWebhookUrl?: unknown }).notifyWebhookUrl;
 
+  if (
+    update.studentConsulting !== undefined &&
+    (update.studentConsulting === null ||
+      Array.isArray(update.studentConsulting) ||
+      typeof update.studentConsulting !== "object" ||
+      typeof update.studentConsulting.email !== "string" ||
+      typeof update.studentConsulting.password !== "string")
+  ) {
+    throw new Error("StudentConsulting-uppgifter måste ha e-post och lösenord som text.");
+  }
+  if (
+    update.studentConsultingAutoSubmit !== undefined &&
+    typeof update.studentConsultingAutoSubmit !== "boolean"
+  ) {
+    throw new Error("Automatisk inskickning måste vara true eller false.");
+  }
   if (update.studentConsulting !== undefined) {
     const email = normalizeEmail(update.studentConsulting.email, "StudentConsulting e-post");
     const password = update.studentConsulting.password.trim();
@@ -213,19 +235,24 @@ export async function saveRuntimeConfiguration(
   const { current } = await resolveConfigKeys(env);
   const encrypted = await encryptConfiguration(current, next);
 
-  await env.DB.prepare(
-    `INSERT INTO runtime_configuration
-       (id, ciphertext, iv, schema_version, updated_by, updated_at)
-     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-     ON CONFLICT(id) DO UPDATE SET
-       ciphertext = excluded.ciphertext,
-       iv = excluded.iv,
-       schema_version = excluded.schema_version,
-       updated_by = excluded.updated_by,
-       updated_at = CURRENT_TIMESTAMP`,
-  )
-    .bind(CONFIG_ID, encrypted.ciphertext, encrypted.iv, CONFIG_VERSION, updatedBy)
-    .run();
+  const result = before
+    ? await env.DB.prepare(
+        `UPDATE runtime_configuration
+         SET ciphertext = ?, iv = ?, schema_version = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND ciphertext = ?`,
+      )
+        .bind(encrypted.ciphertext, encrypted.iv, CONFIG_VERSION, updatedBy, CONFIG_ID, before.ciphertext)
+        .run()
+    : await env.DB.prepare(
+        `INSERT OR IGNORE INTO runtime_configuration
+           (id, ciphertext, iv, schema_version, updated_by, updated_at)
+         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      )
+        .bind(CONFIG_ID, encrypted.ciphertext, encrypted.iv, CONFIG_VERSION, updatedBy)
+        .run();
+  if (Number(result.meta?.changes ?? 0) !== 1) {
+    throw new Error("Konfigurationen ändrades samtidigt av någon annan. Ladda om sidan och försök igen.");
+  }
 }
 
 async function loadManagedRuntimeConfiguration(

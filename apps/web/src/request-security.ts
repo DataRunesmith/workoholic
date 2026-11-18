@@ -1,14 +1,30 @@
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
-export function requireSameOriginMutation(request: Request): Response | null {
+/**
+ * The public origin of the site. Behind a TLS-terminating proxy request.url is
+ * plain http, so a mutation is also accepted from the configured PUBLIC_BASE_URL.
+ */
+export function publicOrigin(request: Request, publicBaseUrl?: string): string {
+  if (publicBaseUrl) {
+    try {
+      return new URL(publicBaseUrl).origin;
+    } catch {
+      // A malformed value falls back to the request URL.
+    }
+  }
+  return new URL(request.url).origin;
+}
+
+export function requireSameOriginMutation(request: Request, publicBaseUrl?: string): Response | null {
   if (SAFE_METHODS.has(request.method.toUpperCase())) return null;
 
-  const requestUrl = new URL(request.url);
+  const requestOrigin = new URL(request.url).origin;
+  const publicSiteOrigin = publicOrigin(request, publicBaseUrl);
   const origin = request.headers.get("origin");
   if (!origin) return forbidden();
 
   try {
-    if (new URL(origin).origin !== requestUrl.origin) return forbidden();
+    if (![requestOrigin, publicSiteOrigin].includes(new URL(origin).origin)) return forbidden();
   } catch {
     return forbidden();
   }

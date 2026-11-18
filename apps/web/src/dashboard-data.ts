@@ -219,7 +219,7 @@ export async function getDashboardData(db: D1Database, configuration: RuntimeCon
     applicationMonth,
     target: MONTHLY_APPLICATION_TARGET,
     verified: Number(progress?.verified ?? 0),
-    quotaUsed: Number(progress?.verified ?? 0),
+    quotaUsed: Math.min(Number(progress?.verified ?? 0), MONTHLY_APPLICATION_TARGET),
     quotaSlots,
     applicationWindowOpen: isApplicationAutomationWindow(),
     activityCalendar: calendarApplications.results,

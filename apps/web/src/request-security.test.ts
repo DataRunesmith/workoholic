@@ -19,6 +19,16 @@ describe("requireSameOriginMutation", () => {
     expect(requireSameOriginMutation(request)).toBeNull();
   });
 
+  it("compares against PUBLIC_BASE_URL behind a TLS-terminating proxy", () => {
+    const request = new Request("http://workoholic.example.com/auth/login", {
+      method: "POST",
+      headers: { Origin: "https://workoholic.example.com" },
+    });
+    expect(requireSameOriginMutation(request)?.status).toBe(403);
+    expect(requireSameOriginMutation(request, "https://workoholic.example.com/")).toBeNull();
+    expect(requireSameOriginMutation(request, "not a url")?.status).toBe(403);
+  });
+
   it.each([undefined, "https://evil.example", "not a valid origin"])(
     "rejects missing or invalid origin %s",
     (origin) => {
