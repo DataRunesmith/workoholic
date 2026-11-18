@@ -83,7 +83,7 @@ export default {
       return redirectTo("/");
     }
 
-    const mutationFailure = requireSameOriginMutation(request);
+    const mutationFailure = requireSameOriginMutation(request, env.PUBLIC_BASE_URL);
     if (mutationFailure) return mutationFailure;
 
     if (dashboardAuthMode(env) === "password") {
@@ -200,7 +200,7 @@ export default {
     const applicationRecheckMatch = url.pathname.match(/^\/api\/applications\/([^/]+)\/recheck$/);
     if (request.method === "POST" && applicationRecheckMatch) {
       try {
-        const applicationId = decodeURIComponent(applicationRecheckMatch[1]);
+        const applicationId = decodePathSegment(applicationRecheckMatch[1]);
         const runtime = await resolveRuntimeConfiguration(env);
         const result = await recheckApplicationAttention(runtime.env, applicationId);
         if (!result) {
@@ -219,7 +219,7 @@ export default {
     );
     if (request.method === "POST" && applicationNotSubmittedMatch) {
       try {
-        const applicationId = decodeURIComponent(applicationNotSubmittedMatch[1]);
+        const applicationId = decodePathSegment(applicationNotSubmittedMatch[1]);
         const runtime = await resolveRuntimeConfiguration(env);
         const result = await confirmApplicationNotSubmitted(runtime.env, applicationId);
         if (!result) {
@@ -236,7 +236,7 @@ export default {
     const runDetailMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (request.method === "GET" && runDetailMatch) {
       try {
-        const runId = decodeURIComponent(runDetailMatch[1]);
+        const runId = decodePathSegment(runDetailMatch[1]);
         const detail = await getRunDetail(env.DB, runId);
         if (!detail) return Response.json({ error: "Run not found" }, { status: 404 });
         return Response.json(detail);
@@ -247,7 +247,7 @@ export default {
 
     const stopRunMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/stop$/);
     if (request.method === "POST" && stopRunMatch) {
-      const runId = decodeURIComponent(stopRunMatch[1]);
+      const runId = decodePathSegment(stopRunMatch[1]);
       const run = await getRun(env.DB, runId);
       if (!run) return Response.json({ error: "Run not found" }, { status: 404 });
       if (run.status !== "running") {
@@ -280,7 +280,7 @@ export default {
 
     const deleteRunMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (request.method === "DELETE" && deleteRunMatch) {
-      const runId = decodeURIComponent(deleteRunMatch[1]);
+      const runId = decodePathSegment(deleteRunMatch[1]);
       const detail = await getRunDetail(env.DB, runId);
       if (!detail) return Response.json({ error: "Run not found" }, { status: 404 });
       if (detail.run.status === "running") {
@@ -460,6 +460,15 @@ export default {
     }
   },
 } satisfies ExportedHandler<Env>;
+
+/** A malformed escape (for example %E0%A4%A) matches no record instead of throwing. */
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

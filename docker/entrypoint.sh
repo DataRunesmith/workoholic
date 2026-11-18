@@ -55,16 +55,40 @@ sed "s/__BROWSER_REMOTE__/$remote/" "$site/docker/wrangler.template.jsonc" >"$si
 cd "$site"
 
 vars=$(mktemp)
+trap 'rm -f "$vars"' EXIT
 chmod 600 "$vars"
+
+# Writes NAME=value so wrangler's dotenv parser returns the value unchanged:
+# '#' and spaces survive inside quotes, and single quotes are literal. Values
+# the parser would alter are refused, naming only the variable: '$' (wrangler
+# expands $VAR after parsing), newlines, a trailing backslash, and a value with
+# both ' and a backtick.
+env_line() {
+  nl='
+'
+  case $2 in
+    *'$'* | *"$nl"* | *\\)
+      echo "$1 cannot contain \$ or a newline, or end with a backslash" >&2; exit 1 ;;
+  esac
+  case $2 in
+    *"'"*)
+      case $2 in
+        *'`'*) echo "$1 cannot contain both ' and \`" >&2; exit 1 ;;
+      esac
+      printf '%s=`%s`\n' "$1" "$2" ;;
+    *) printf "%s='%s'\n" "$1" "$2" ;;
+  esac
+}
+
 {
-  echo "PUBLIC_BASE_URL=${PUBLIC_URL%/}"
-  echo "AUTH_MODE=$AUTH_MODE"
-  echo "WORKOHOLIC_CONFIG_KEY=$WORKOHOLIC_CONFIG_KEY"
+  env_line PUBLIC_BASE_URL "${PUBLIC_URL%/}"
+  env_line AUTH_MODE "$AUTH_MODE"
+  env_line WORKOHOLIC_CONFIG_KEY "$WORKOHOLIC_CONFIG_KEY"
   for name in ADMIN_PASSWORD CF_ACCESS_TEAM_DOMAIN CF_ACCESS_AUD SMTP_HOST SMTP_PORT SMTP_USER \
     SMTP_PASSWORD NOTIFY_EMAIL_TO NOTIFY_EMAIL_FROM NOTIFY_EMAIL_MODE STUDENTCONSULTING_EMAIL \
     STUDENTCONSULTING_PASSWORD STUDENTCONSULTING_AUTOSUBMIT; do
     value=$(printenv "$name" || true)
-    [ -n "$value" ] && echo "$name=$value"
+    [ -n "$value" ] && env_line "$name" "$value"
   done
 } >>"$vars"
 

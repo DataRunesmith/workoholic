@@ -20,7 +20,7 @@ Ett GitHub-konto behövs bara för de två sista. För de två första räcker d
 ### Docker
 
 ```sh
-ADMIN_PASSWORD='minst-8-tecken' docker compose up -d
+ADMIN_PASSWORD='minst-16-tecken' docker compose up -d
 ```
 
 Välj ett eget lösenord i stället för exemplet. Öppna <http://localhost:8787>, logga in med lösenordet och fyll i inställningarna. All data, även en genererad krypteringsnyckel, sparas i volymen `data`, så säkerhetskopiera den volymen. Jobbsajten besöks med en Chrome som containern laddar ned första gången den behövs; `compose.yaml` lägger till behörigheten `SYS_ADMIN` så att Chrome kan köra i sin egen sandlåda. Sätt `PUBLIC_URL` om appen nås på en annan adress. I stället för att skriva värdena på kommandoraden kan du lägga dem i en fil med namnet `.env` bredvid `compose.yaml`; git ignorerar den.
