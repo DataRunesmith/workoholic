@@ -25,6 +25,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -34,10 +35,18 @@ import { posix } from "node:path";
 // scripts in the built HTML under <dir>, for a Content-Security-Policy that
 // does not allow inline scripts in general.
 if (process.argv[2] === "--csp-hashes") {
+  const rawRoot = process.argv[3];
+  if (!rawRoot) throw new Error("usage: node tools/docs-site.mjs --csp-hashes <dir>");
+  const scanRoot = posix.resolve(rawRoot);
+  if (!existsSync(scanRoot) || !statSync(scanRoot).isDirectory()) {
+    throw new Error(`--csp-hashes path is not a directory: ${rawRoot}`);
+  }
+
   const hashes = new Set();
   const scan = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = posix.join(dir, entry.name);
+      const path = posix.resolve(posix.join(dir, entry.name));
+      if (path !== scanRoot && !path.startsWith(`${scanRoot}/`)) continue;
       if (entry.isDirectory()) scan(path);
       else if (path.endsWith(".html")) {
         for (const [, code] of readFileSync(path, "utf8").matchAll(
@@ -48,7 +57,7 @@ if (process.argv[2] === "--csp-hashes") {
       }
     }
   };
-  scan(process.argv[3]);
+  scan(scanRoot);
   console.log([...hashes].sort().join(" "));
   process.exit(0);
 }
