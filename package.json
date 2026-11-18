@@ -6,8 +6,9 @@
   "packageManager": "pnpm@12.20.0",
   "scripts": {
     "typecheck": "pnpm -r typecheck",
-    "test": "node --test test/*.test.mjs && pnpm -r test",
+    "test": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=junit.xml test/*.test.mjs && pnpm -r test",
     "dev": "pnpm --filter @workoholic/web dev",
+    "postinstall": "node -e \"process.env.WORKERS_CI==='1'&&process.env.WORKERS_CI_BRANCH==='main'&&require('child_process').execFileSync(process.execPath,['tools/setup.mjs','--workers-build'],{stdio:'inherit'})\"",
     "setup:cloudflare": "node --env-file-if-exists=setup.env tools/setup.mjs",
     "secrets:push": "node --env-file-if-exists=setup.env tools/secrets.mjs"
   },
