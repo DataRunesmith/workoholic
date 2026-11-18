@@ -54,8 +54,13 @@ if (process.argv[2] === "--csp-hashes") {
 }
 
 const wiki = process.argv[2] === "--wiki";
-const out = wiki ? process.argv[3] : "site-docs";
-if (!out) throw new Error("usage: node tools/docs-site.mjs [--wiki <dir>]");
+const outArg = wiki ? process.argv[3] : "site-docs";
+if (!outArg) throw new Error("usage: node tools/docs-site.mjs [--wiki <dir>]");
+const safeRoot = posix.resolve(process.cwd());
+const out = posix.resolve(safeRoot, outArg);
+if (out !== safeRoot && !out.startsWith(`${safeRoot}/`)) {
+  throw new Error(`output path must be inside ${safeRoot}`);
+}
 const config = readFileSync("zensical.toml", "utf8");
 const repoUrl = config.match(/^repo_url\s*=\s*"([^"]+)"/m)?.[1];
 if (!repoUrl) throw new Error("repo_url is missing in zensical.toml");
