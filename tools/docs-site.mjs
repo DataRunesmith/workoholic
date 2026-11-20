@@ -28,7 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { posix } from "node:path";
+import { posix, resolve } from "node:path";
 
 // --csp-hashes: print the CSP sources ('sha256-...') that allow the inline
 // scripts in the built HTML under <dir>, for a Content-Security-Policy that
@@ -55,16 +55,14 @@ if (process.argv[2] === "--csp-hashes") {
 
 const wiki = process.argv[2] === "--wiki";
 const outArg = wiki ? process.argv[3] : "site-docs";
-if (!outArg) throw new Error("usage: node tools/docs-site.mjs [--wiki <dir>]");
-const out = posix.normalize(outArg);
-if (
-  !out ||
-  out === "." ||
-  posix.isAbsolute(out) ||
-  out.split("/").includes("..")
-) {
-  throw new Error("invalid output directory: must be a relative path within the current working directory");
+if (!outArg || !outArg.trim()) throw new Error("usage: node tools/docs-site.mjs [--wiki <dir>]");
+if (outArg.includes("\0")) throw new Error("output directory contains invalid null byte");
+const cwd = resolve(process.cwd());
+const resolvedOut = resolve(cwd, outArg);
+if (resolvedOut !== cwd && !resolvedOut.startsWith(`${cwd}/`)) {
+  throw new Error("output directory must be inside the current working directory");
 }
+const out = resolvedOut;
 const config = readFileSync("zensical.toml", "utf8");
 const repoUrl = config.match(/^repo_url\s*=\s*"([^"]+)"/m)?.[1];
 if (!repoUrl) throw new Error("repo_url is missing in zensical.toml");
